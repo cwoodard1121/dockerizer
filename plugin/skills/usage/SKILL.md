@@ -7,8 +7,7 @@ description: Show how much of the 2,500 free Cloud Build minutes dockeriser has 
 
 Run the CLI through the plugin launcher: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js"` (called `CLI`
 below; it finds the dockeriser folder and runs `npm install` there the first time). If
-`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the path from the session-start note, or
-`node "C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js"`.
+`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the CLI path from the session-start note.
 
 1. Run `CLI usage --json` (add `--month YYYY-MM` if a past month was asked for).
 2. If it exits non-zero, show the `error.message` and `error.fix`. For exit code 2 or 3, run

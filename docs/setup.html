@@ -63,8 +63,7 @@ a { color: var(--accent); }
       <h2>Run the setup script</h2>
       <p>From the dockeriser folder. It asks which project to use (or pass <code>-Project my-id</code>), and opens your browser to sign in to Google.</p>
       <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File setup\setup.ps1</code><button type="button">Copy</button></div>
-      <p class="note">Or from anywhere:</p>
-      <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"</code><button type="button">Copy</button></div>
+      <p class="note">From another folder, give the full path to <code>setup\setup.ps1</code> in your dockeriser folder.</p>
       <p class="note">It sets up the project, billing, a $5 budget alert and everything else, then checks it all. Safe to run again. Near the end it may show &ldquo;waiting for Google to apply the new permissions&hellip;&rdquo; for up to about 3 minutes; that is normal.</p>
       <p class="note">In Claude Code, <code>/dockeriser:setup</code> does this step: it asks in chat which project to use, then runs the script.</p>
     </li>

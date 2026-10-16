@@ -65,6 +65,9 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   let sources;
   if (built) {
     sources = built.map((b) => ({ name: b.name, repository: b.repository, digest: b.digest }));
+    // Built images that the deploy section does not map (e.g. a pushed base image) stay put.
+    if (only.length) sources = sources.filter((s) => only.includes(s.name));
+    else if (d.images && Object.keys(d.images).length && sources.some((s) => d.images[s.name])) sources = sources.filter((s) => d.images[s.name]);
   } else if (flags.image) {
     const img = expandImage({ image: flags.image, project: cfg.project, region: cfg.region, repo: cfg.repo, fallbackTag: () => 'latest' });
     sources = [{ name: shortName(img.repository), repository: img.repository, tag: img.tags[0] }];

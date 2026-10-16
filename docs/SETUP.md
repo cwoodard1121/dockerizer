@@ -13,10 +13,7 @@ machines instead of yours. You do it once. It takes about 5 minutes.
    ```
    powershell -ExecutionPolicy Bypass -File setup\setup.ps1
    ```
-   Full-path form, from anywhere:
-   ```
-   powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"
-   ```
+   From another folder, give the full path to `setup\setup.ps1` in your dockeriser folder.
 3. Try a build:
    ```
    node bin\dockeriser.js build examples\hello --image hello
@@ -87,7 +84,7 @@ Every build pushes the image to the `docker-images` repo by itself and prints th
 its digest (`<region>-docker.pkg.dev/<project>/docker-images/<name>:<tag>@sha256:…`). Nothing is pulled
 to your PC.
 
-- **On a PC signed in to gcloud** (already done on Cameron's MSI), once:
+- **On a PC signed in to gcloud**, once:
   `gcloud auth configure-docker northamerica-northeast2-docker.pkg.dev`. After that,
   `docker pull <address>` works.
 - **On a server or droplet**, by hand: create a service account with only
@@ -96,7 +93,8 @@ to your PC.
   `cat key.json | docker login -u _json_key --password-stdin https://northamerica-northeast2-docker.pkg.dev`
   and `docker pull <address>`.
 
-dockeriser itself doesn't SSH anywhere or deploy; running the image on a server is a separate step.
+To put images on your own server over SSH, see "Deploy to a server" in the README:
+`dockeriser server add`, then `dockeriser deploy`. By default no key is needed on the server.
 
 ## Doing it by clicking instead (no script)
 

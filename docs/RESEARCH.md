@@ -81,6 +81,63 @@ redirects to `docs.cloud.google.com/build/docs/...`; both URLs are the same page
 APIs enabled by setup: `cloudbuild`, `artifactregistry`, `storage`, `iam`, `iamcredentials` (impersonation
 tokens), `logging`, `serviceusage`.
 
+## 5. Deploying to a server (checked 2026-10-16)
+
+### Getting images out of Google: what it costs
+
+- Artifact Registry bills data leaving a repository for a client outside Google (a DigitalOcean
+  droplet, a home PC) at **Premium Tier internet rates**: "network traffic leaving a repository to a
+  client that is not a Google product". https://cloud.google.com/artifact-registry/pricing
+- Premium Tier, to North America, per account per month: **first 1 GiB free**, then **$0.12/GiB** up to
+  1 TiB, $0.11/GiB to 10 TiB, $0.08/GiB above. The 200 GiB/month free allowance is Standard Tier only and
+  does not apply. https://cloud.google.com/vpc/network-pricing
+- Cloud Build: "Network egress will be charged according to standard rates", so a build that pushes to
+  an outside registry pays the same egress. https://cloud.google.com/build/pricing
+- Only changed layers move. A pull by digest downloads only layers the server lacks; dockeriser's ssh
+  transfer skips an image the server already has (same content tag) but otherwise sends the whole image
+  through the PC, so for big, often-changing images `--transfer pull` moves fewer bytes.
+- Example: a 300 MB image where each deploy changes 40 MB of layers, deployed 60 times a month: pull
+  transfer ≈ 2.4 GB ≈ $0.17; ssh transfer of the full image ≈ 18 GB ≈ $2.04 (minus the free 1 GiB).
+
+### DigitalOcean Container Registry (DOCR) instead?
+
+| Plan | Price | Repos | Storage | Overage |
+|---|---|---|---|---|
+| Starter | $0 | 1 | 500 MiB | none |
+| Basic | $5/mo | 5 | 5 GiB | $0.02/GiB |
+| Professional | $20/mo | unlimited | 100 GiB | $0.02/GiB |
+
+Sources: https://www.digitalocean.com/pricing/container-registry,
+https://docs.digitalocean.com/products/container-registry/details/pricing/. DOCR's pages say nothing
+about bandwidth; DigitalOcean's bandwidth docs say inbound transfer to Droplets is free
+(https://docs.digitalocean.com/platform/billing/bandwidth/), so a droplet pulling from DOCR should cost
+nothing on the DO side (inferred, not stated outright).
+
+**Decision: stay on Artifact Registry.** Cloud Build would still push every changed layer out of
+Google (same ~$0.12/GiB), and DOCR adds $5-20 a month (Starter's one repository and 500 MiB is too
+small for multi-image projects). It only pays off when many droplets pull the same images. No DOCR
+target was built.
+
+### `docker load` of an archive built from registry blobs
+
+- moby's loader (`daemon/internal/image/tarexport/load.go`) untars the whole archive to a temp folder
+  before reading `manifest.json` (`chrootarchive.Untar(...)`), so entry order does not matter, and
+  passes each layer file through `compression.DecompressStream(...)`, which detects gzip (and zstd,
+  xz, bzip2). So registry layers can go in as-is, still compressed: no local Docker and no
+  decompression on the PC. The layer digests the config lists (`rootfs.diff_ids`) are checked against
+  the decompressed data by Docker itself.
+  https://github.com/moby/moby/blob/master/daemon/internal/image/tarexport/load.go
+- With the containerd image store (the default on new Docker installs), `docker load` goes through
+  containerd's archive importer, which also reads docker-save archives and detects layer compression.
+  Not yet tried against a live server; `dockeriser server check` plus a first deploy of a small image
+  will show it.
+- `docker load` does not record a registry digest, so dockeriser tags each image it loads as
+  `<repository>:dk-<first 12 hex of the digest>` and uses that tag to tell whether the server already
+  has the image.
+- Registry API: Artifact Registry accepts a Google access token as a bearer token on
+  `https://<region>-docker.pkg.dev/v2/...`; dockeriser also handles the standard 401 challenge by
+  exchanging it with basic auth `oauth2accesstoken:<token>`, the way `docker login` does.
+
 ## Deviations from the original design (and why)
 
 1. **Logs bucket gets `roles/storage.admin`, not `storage.objectAdmin`.** The logs page names Storage

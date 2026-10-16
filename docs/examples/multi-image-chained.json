@@ -1,0 +1,45 @@
+{
+  "images": [
+    {
+      "name": "base",
+      "image": "shop-base",
+      "dockerfile": "Dockerfile",
+      "localTag": "shop:base",
+      "buildArgs": {
+        "REVISION": "${REVISION}"
+      }
+    },
+    {
+      "name": "app",
+      "image": "shop-app",
+      "dockerfile": "deploy/app.Dockerfile",
+      "context": ".local/deploy/app-context"
+    },
+    {
+      "name": "proxy",
+      "image": "shop-proxy",
+      "dockerfile": "deploy/proxy.Dockerfile",
+      "context": "deploy"
+    }
+  ],
+  "deploy": {
+    "server": "prod",
+    "mode": "compose",
+    "composeDir": "/opt/shop",
+    "images": {
+      "app": {
+        "tagAs": "shop-app:prod",
+        "services": [
+          "api",
+          "worker"
+        ]
+      },
+      "proxy": {
+        "tagAs": "shop-proxy:prod",
+        "services": [
+          "proxy"
+        ]
+      }
+    }
+  }
+}

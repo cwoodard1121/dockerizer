@@ -1,7 +1,7 @@
 # dockeriser
 
 Runs `docker build` on Google Cloud Build instead of this PC: packages a folder, submits it, streams the logs and pushes the image to Artifact Registry.
-Used by Cameron and his AI agents (via the Claude Code plugin in `plugin/`: a skill, six `/dockeriser:*` slash commands and a SessionStart hook) so Docker builds stop eating local memory. Setup is one command (`setup/setup.ps1`, or `/dockeriser:setup`) that asks for the project.
+Used by Cameron and his AI agents (via the Claude Code plugin in `plugin/`: a skill, `/dockeriser:*` slash commands and a SessionStart hook) so Docker builds stop eating local memory, and to deploy built images to their own servers over SSH. It works for any project through a per-project `dockeriser.json`, which `dockeriser init` writes. Nothing user-specific is hardcoded. Setup is one command (`setup/setup.ps1`, or `/dockeriser:setup`) that asks for the project.
 
 <!-- change-workflow:start — managed by the change-workflow setup skill; edit the profile values freely, re-running setup keeps them -->
 ## Change workflow profile
@@ -9,11 +9,11 @@ Used by Cameron and his AI agents (via the Claude Code plugin in `plugin/`: a sk
 Read by the `change-workflow` skill (any agent that is not Claude Code reads that skill's file and
 follows it). Fill every field; `None` is a valid answer, a blank is not.
 
-- **Read first:** `README.md` (commands, exit codes, `--json` schema), `docs/SETUP.md` (Google Cloud setup and roles), `docs/RESEARCH.md` (verified API/IAM/pricing facts), `bin/dockeriser.js` (CLI entry), `src/` (one module per stage: `config` → `package-source` → `upload` → `build` → `logs`, plus `usage`/`status`/`login`/`doctor`/`errors`/`output`), `plugin/` (skills in `plugin/skills/<name>/SKILL.md`, launcher `plugin/scripts/run.js`, hook `plugin/hooks/session-start.js`)
-- **Surfaces:** CLI (`dockeriser`), Claude Code plugin (`plugin/`: the `dockeriser` skill, slash commands `/dockeriser:build|setup|doctor|status|usage|login`, SessionStart hook), Google Cloud setup scripts (`setup/`)
+- **Read first:** `README.md` (commands, exit codes, `--json` schema), `docs/SETUP.md` (Google Cloud setup and roles), `docs/RESEARCH.md` (verified API/IAM/pricing facts), `bin/dockeriser.js` (CLI entry), `src/` (one module per stage: `config` → `package-source` → `upload` → `build` → `logs`, plus `usage`/`status`/`login`/`doctor`/`errors`/`output`), `src/project.js` + `src/deploy.js` + `src/remote.js` (dockeriser.json, deploys, server-side scripts), `plugin/` (skills in `plugin/skills/<name>/SKILL.md`, launcher `plugin/scripts/run.js`, hook `plugin/hooks/session-start.js`), `docs/examples/`
+- **Surfaces:** CLI (`dockeriser`), Claude Code plugin (`plugin/`: the `dockeriser` skill, slash commands `/dockeriser:init|build|deploy|server|rollback|logs|setup|doctor|status|usage|login`, SessionStart hook), deploy targets reached over SSH (never deployed to automatically), Google Cloud setup scripts (`setup/`)
 - **Interface checklist:** for a new or changed command, flag or JSON field: 1) `parseArgs` options in `bin/dockeriser.js` 2) `--help` text 3) README command reference / exit codes / `--json` schema 4) `plugin/skills/dockeriser/SKILL.md` if agents use it 5) tests in `test/`
 - **Gates:** `npm test` always · `bash -n setup/setup.sh` and the PowerShell parser check of `setup/setup.ps1` when `setup/` changed · `node bin/dockeriser.js build examples/hello --image hello --project demo-proj --dry-run` when the build request changed · a real `node bin/dockeriser.js build examples/hello --image hello` when `src/build.js`, `src/logs.js` or `src/upload.js` changed and credentials are configured
-- **Release kinds:** `Local` — agents run it from the clone at `C:/Users/camer/Desktop/Projects/dockeriser`; pull it · `Cloud setup` — re-run `setup/setup.ps1` (Google Cloud resources or permissions changed) · `None — docs, tests, tooling`
+- **Release kinds:** `Local` — agents run it through the plugin (the marketplace clone) or `DOCKERISER_HOME`; update it with `/plugin update` · `Cloud setup` — re-run `setup/setup.ps1` (Google Cloud resources or permissions changed) · `None — docs, tests, tooling`
 - **Specs / Plans:** `docs/specs` / `docs/plans`
 - **After an issue change:** None (no board sync script)
 - **Agent label:** `agent: cameron-claude`

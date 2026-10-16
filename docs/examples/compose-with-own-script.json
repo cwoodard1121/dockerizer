@@ -1,0 +1,28 @@
+{
+  "source": "git",
+  "images": [
+    {
+      "name": "api",
+      "image": "myapp-api",
+      "dockerfile": "Dockerfile",
+      "buildArgs": { "GIT_SHA": "${git.sha}" }
+    },
+    {
+      "name": "web",
+      "image": "myapp-web",
+      "dockerfile": "web/Dockerfile",
+      "context": "web",
+      "buildArgsFile": ".env",
+      "buildArgsFromEnv": ["NEXT_PUBLIC_*"]
+    }
+  ],
+  "deploy": {
+    "server": "prod",
+    "mode": "load-only",
+    "images": {
+      "api": { "tagAs": "myapp-api:latest" },
+      "web": { "tagAs": "myapp-web:latest" }
+    },
+    "then": "cd /opt/myapp && bash remote.sh"
+  }
+}

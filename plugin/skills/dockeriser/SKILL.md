@@ -10,8 +10,7 @@ the build on Google Cloud Build (free tier: 2,500 build-minutes a month) and pus
 
 Run the CLI through the plugin launcher: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js"` (called `CLI`
 below; it finds the dockeriser folder and runs `npm install` there the first time). If
-`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the path from the session-start note, or
-`node "C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js"`.
+`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the CLI path from the session-start note.
 `/dockeriser:build` does all of this for one folder.
 
 ## 1. Check sign-in first (instant, no network)
@@ -21,7 +20,7 @@ CLI status --offline --json
 ```
 
 If `ready` is `false`, do NOT fall back to local docker. Use `/dockeriser:setup` (asks for the project in
-chat, then runs the setup script; a browser opens for Google sign-in). Or tell Cameron to type, in the
+chat, then runs the setup script; a browser opens for Google sign-in). Or tell the user to type, in the
 Claude prompt:
 
 ```
@@ -29,9 +28,9 @@ Claude prompt:
 ```
 
 `<repo>` is the folder above `bin` in the CLI path. Use the project ID from the status output (`project`)
-if there is one; otherwise ask him for his project ID (or tell him to run the command without `-Project`
-in his own terminal, where it asks). If `gcloud` is not installed (`gcloud.installed: false`), the first
-step is `winget install Google.CloudSDK` and a new terminal. Then stop and wait for him.
+if there is one; otherwise ask the user for their project ID (or tell them to run the command without `-Project`
+in their own terminal, where it asks). If `gcloud` is not installed (`gcloud.installed: false`), the first
+step is `winget install Google.CloudSDK` and a new terminal. Then stop and wait for them.
 
 ## 2. Build
 
@@ -46,6 +45,10 @@ CLI build <dir> --image <name>[:<tag>] --json
   `--dry-run` (print the request, no network).
 - With `--json`, the build log streams to stderr and stdout gets exactly one JSON object. Builds take
   minutes; run it with a long timeout (or in the background) rather than polling.
+- **Projects with several images** (a `dockeriser.json` with `images`): `CLI build <dir> --json` builds
+  them all in one Cloud Build run, in order; `--only a,b` builds a subset (plus any local base they
+  need). No dockeriser.json yet: `/dockeriser:init` detects Dockerfiles, compose files and ship scripts
+  and writes one. Build args are visible in the Cloud Build console: public values only, never secrets.
 
 ## 3. Read the result
 
@@ -75,22 +78,23 @@ first; fix the Dockerfile or code and build again. `error.fix` says exactly what
 | 0 | success | use the image refs |
 | 1 | build failed (or unexpected error) | read errorTail / failedStep, fix, rebuild |
 | 2 | config or input problem (no project, bad flag, missing Dockerfile, API off) | follow `error.fix` |
-| 3 | credentials or permission problem | give Cameron the steps from `CLI login` |
+| 3 | credentials or permission problem | give the user the steps from `CLI login` |
 | 4 | source upload failed | follow `error.fix` (usually re-run setup) |
 | 130 | interrupted; the build was cancelled | rebuild if still needed |
 
-## 4. Getting the image
+## 4. Getting the image onto a server
 
 The build already pushed the image; nothing is pulled to this PC. Its address is
 `images[].name@digest`.
 
-- On a PC signed in to gcloud (Cameron's MSI already is): `gcloud auth configure-docker
-  northamerica-northeast2-docker.pkg.dev` once, then `docker pull <address>`.
-- On a server: a service account with only `roles/artifactregistry.reader` on the repo, a key for it copied
-  to the server, then `cat key.json | docker login -u _json_key --password-stdin
-  https://northamerica-northeast2-docker.pkg.dev` and `docker pull <address>`.
+- **Deploy only when the user asks**, following the project's own ship rules (AGENTS.md, CLAUDE.md,
+  README). Then use `/dockeriser:deploy` (or `CLI build <dir> --deploy <server> --json` for the exact
+  images just built). It streams images over SSH into `docker load` with health checks and rollback;
+  `/dockeriser:server` saves servers, `/dockeriser:rollback` and `/dockeriser:logs` follow up.
+- On a PC signed in to gcloud: `gcloud auth configure-docker <region>-docker.pkg.dev` once, then
+  `docker pull <address>`.
 
 ## 5. After building
 
-If `usage.percent` is over 80 (or the line says "over by"), tell Cameron the usage line in one sentence.
+If `usage.percent` is over 80 (or the line says "over by"), tell the user the usage line in one sentence.
 `/dockeriser:usage` gives the full picture.

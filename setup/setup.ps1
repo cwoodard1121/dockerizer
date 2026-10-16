@@ -140,7 +140,7 @@ function Select-Project {
     Write-Host 'You have no Google Cloud projects yet, so let''s make one.'
   }
   Write-Host 'Opening the "create project" page in your browser. Either create it there and type its ID here,'
-  Write-Host 'or just type a new ID (e.g. cameron-builds-123) and this script will create it for you.'
+  Write-Host 'or just type a new ID (e.g. my-builds-123) and this script will create it for you.'
   try { Start-Process 'https://console.cloud.google.com/projectcreate' } catch { }
   return Read-ProjectId
 }

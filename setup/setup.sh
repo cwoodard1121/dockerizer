@@ -96,7 +96,7 @@ select_project() {
     echo "You have no Google Cloud projects yet, so let's make one."
   fi
   echo "Opening the \"create project\" page in your browser. Either create it there and type its ID here,"
-  echo "or just type a new ID (e.g. cameron-builds-123) and this script will create it for you."
+  echo "or just type a new ID (e.g. my-builds-123) and this script will create it for you."
   open_url "https://console.cloud.google.com/projectcreate"
   read_project_id
 }

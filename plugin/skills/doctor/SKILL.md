@@ -5,8 +5,7 @@ description: Check every part of the dockeriser Google Cloud setup online and ex
 
 # /dockeriser:doctor
 
-1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js" doctor --json` (if `${CLAUDE_PLUGIN_ROOT}` was not filled
-   in, use `node "C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js" doctor --json`).
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js" doctor --json`.
 2. `ok: true`: say everything is in place in one line (project, region, signed-in account).
 3. Otherwise, for each check with `status: "fail"`, give its name, what is wrong (`detail`) and the fix
    (`fix`) in plain words. Checks marked `skip` only ran because an earlier one failed; don't list them.

@@ -11,7 +11,7 @@
     {
       "name": "dockeriser",
       "source": "./plugin",
-      "description": "Use Google Cloud Build instead of local docker build, with sign-in steps, free-minute usage tracking and a session-start status note.",
+      "description": "Use Google Cloud Build instead of local docker build, deploy the images to your own servers over SSH, with setup, usage tracking and a session-start status note.",
       "category": "development"
     }
   ]

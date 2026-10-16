@@ -1,0 +1,20 @@
+{
+  "images": [
+    { "name": "app", "image": "tutor-app" },
+    {
+      "name": "solver",
+      "image": "tutor-solver",
+      "context": "../solver",
+      "dockerfile": "../solver/Dockerfile"
+    }
+  ],
+  "deploy": {
+    "server": "deploy@app.example.com",
+    "mode": "run",
+    "image": "app",
+    "name": "tutor",
+    "ports": ["80:3000"],
+    "envFile": ".env.production",
+    "healthUrl": "http://localhost:3000/health"
+  }
+}
