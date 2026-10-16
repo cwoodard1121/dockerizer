@@ -2,30 +2,39 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LogTailer } from '../src/logs.js';
+import { LogTailer, createRangeReader } from '../src/logs.js';
 import { AuthError, ConfigError, DockeriserError, GRPC, mapGoogleError } from '../src/errors.js';
 import { mapUploadError, sourceObjectName } from '../src/upload.js';
-import { tempTree } from './helpers.js';
+import { gcsLogStorage, tempTree } from './helpers.js';
 
-/** Fake Storage whose single log object grows according to `contents()`. */
+/** Fake Storage whose single log object grows according to `contents()` (null = not created yet). */
 function fakeStorage(contents) {
-  const calls = [];
-  const storage = {
-    bucket: (b) => ({
-      file: (name) => ({
-        download: async ({ start }) => {
-          calls.push({ bucket: b, name, start });
-          const text = contents(calls.length);
-          if (text === null) throw Object.assign(new Error('No such object'), { code: 404 });
-          const buf = Buffer.from(text);
-          if (start >= buf.length) throw Object.assign(new Error('Range Not Satisfiable'), { code: 416 });
-          return [buf.subarray(start)];
-        },
-      }),
-    }),
-  };
-  return { storage, calls };
+  return gcsLogStorage((n) => contents(n) ?? 404);
 }
+
+test('range reader: one plain JSON-API request per poll with a Range header, no retries', async () => {
+  const seen = [];
+  const storage = {
+    authClient: {
+      request: async (opts) => {
+        seen.push(opts);
+        return { status: 206, data: new TextEncoder().encode('abc').buffer };
+      },
+    },
+  };
+  const read = createRangeReader(storage, 'my-logs', 'log-b 1.txt');
+  assert.equal((await read(5)).toString(), 'abc');
+  assert.equal(seen[0].url, 'https://storage.googleapis.com/storage/v1/b/my-logs/o/log-b%201.txt?alt=media');
+  assert.equal(seen[0].headers.Range, 'bytes=5-');
+  assert.equal(seen[0].retry, false);
+  assert.equal(seen[0].responseType, 'arraybuffer');
+
+  const whole = { authClient: { request: async () => ({ status: 200, data: Buffer.from('0123456789') }) }, apiEndpoint: 'http://127.0.0.1:9/' };
+  assert.equal((await createRangeReader(whole, 'b', 'o')(4)).toString(), '456789', 'a 200 reply ignoring Range is sliced');
+
+  const missing = { authClient: { request: async () => Promise.reject(Object.assign(new Error('nope'), { response: { status: 404 } })) } };
+  await assert.rejects(createRangeReader(missing, 'b', 'o')(0), (err) => err.code === 404);
+});
 
 test('tailer reads only new bytes, tolerates 404 and 416, and keeps the full log', async () => {
   const stages = [null, null, 'Step 1\n', 'Step 1\nStep 2\n', 'Step 1\nStep 2\n', 'Step 1\nStep 2\nDONE\n'];
@@ -62,19 +71,13 @@ test('drain gives up after the attempt limit when the log never closes', async (
 test('ring buffer keeps only the last N lines; multibyte text survives chunk splits', async () => {
   const full = Buffer.from(Array.from({ length: 300 }, (_, i) => `l${i}`).join('\n') + '\nhé\n');
   let offsetCalls = 0;
-  const storage = {
-    bucket: () => ({
-      file: () => ({
-        download: async ({ start }) => {
-          offsetCalls++;
-          if (start >= full.length) throw Object.assign(new Error('416'), { code: 416 });
-          return [full.subarray(start, Math.min(full.length, start + 7))]; // 7-byte chunks split "é"
-        },
-      }),
-    }),
+  const reader = async (start) => {
+    offsetCalls++;
+    if (start >= full.length) throw Object.assign(new Error('416'), { code: 416 });
+    return full.subarray(start, Math.min(full.length, start + 7)); // 7-byte chunks split "é"
   };
   const out = [];
-  const t = new LogTailer({ storage, bucket: 'l', buildId: 'b', onText: (s) => out.push(s), ringSize: 200, sleep: async () => {} });
+  const t = new LogTailer({ reader, bucket: 'l', buildId: 'b', onText: (s) => out.push(s), ringSize: 200, sleep: async () => {} });
   while ((await t.readOnce()) > 0);
   assert.ok(offsetCalls > 10);
   assert.equal(out.join(''), full.toString());
@@ -83,13 +86,24 @@ test('ring buffer keeps only the last N lines; multibyte text survives chunk spl
 });
 
 test('a 403 on the log object disables tailing with one warning', async () => {
-  const storage = { bucket: () => ({ file: () => ({ download: async () => Promise.reject(Object.assign(new Error('Forbidden'), { code: 403 })) }) }) };
+  const { storage } = gcsLogStorage(() => 403);
   const warnings = [];
   const t = new LogTailer({ storage, bucket: 'l', buildId: 'b', onText: () => {}, onWarn: (w) => warnings.push(w) });
   await t.readOnce();
   await t.readOnce();
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /logs bucket/);
+});
+
+test('busy (503) and missing (404) answers are not fatal and add nothing', async () => {
+  const { storage, calls } = gcsLogStorage((n) => (n === 1 ? 503 : n === 2 ? 404 : 'ok\n'));
+  const out = [];
+  const t = new LogTailer({ storage, bucket: 'l', buildId: 'b', onText: (s) => out.push(s) });
+  assert.equal(await t.readOnce(), 0);
+  assert.equal(await t.readOnce(), 0);
+  assert.equal(await t.readOnce(), 3);
+  assert.equal(calls.length, 3);
+  assert.equal(out.join(''), 'ok\n');
 });
 
 test('gRPC errors map to friendly typed errors', () => {

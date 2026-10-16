@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { run } from '../src/cli.js';
 import { readUsageCache } from '../src/usage.js';
 import { buildContext } from '../plugin/hooks/session-start.js';
-import { sink, tempTree, tick, ts } from './helpers.js';
+import { gcsLogStorage, sink, tempTree, tick, ts } from './helpers.js';
 
 const REPO = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const HELLO = path.join(REPO, 'examples', 'hello');
+const AR = 'northamerica-northeast2-docker.pkg.dev/demo-proj/docker-images';
 const RESULT_KEYS = ['status', 'buildId', 'images', 'durationSec', 'consoleUrl', 'logFile', 'failedStep', 'failureInfo', 'errorTail'];
 
 /** A home folder that looks fully set up (config + key file), plus an env with no real credentials. */
@@ -42,21 +43,13 @@ function mockClients(final, logText) {
       return [{}];
     },
   };
-  const storage = {
-    bucket: (name) => ({
-      upload: async (file, opts) => {
-        calls.upload.push({ name, file, opts, exists: fs.existsSync(file) });
-        return [{}, { generation: '7' }];
-      },
-      file: () => ({
-        download: async ({ start }) => {
-          const buf = Buffer.from(logText);
-          if (start >= buf.length) throw Object.assign(new Error('416'), { code: 416 });
-          return [buf.subarray(start)];
-        },
-      }),
-    }),
-  };
+  const { storage } = gcsLogStorage(() => logText);
+  storage.bucket = (name) => ({
+    upload: async (file, opts) => {
+      calls.upload.push({ name, file, opts, exists: fs.existsSync(file) });
+      return [{}, { generation: '7' }];
+    },
+  });
   return { calls, createClients: async () => ({ cloudBuild, storage }) };
 }
 
@@ -73,7 +66,7 @@ test('build --json success: one JSON object on stdout with digests and usage; lo
   const { home, env } = setUpHome();
   const tmpDir = tempTree({});
   const { calls, createClients } = mockClients(
-    { status: 'SUCCESS', results: { images: [{ name: 'x/hello:v1', digest: 'sha256:aa' }] } },
+    { status: 'SUCCESS', results: { images: [{ name: `${AR}/hello:v1`, digest: 'sha256:aa' }, { name: `${AR}/hello`, digest: 'sha256:aa' }, { name: `${AR}/hello:latest`, digest: 'sha256:aa' }] } },
     'Step #1: building\nDONE\n',
   );
   const d = deps({ env, homeDir: home, createClients, tmpDir });
@@ -83,7 +76,7 @@ test('build --json success: one JSON object on stdout with digests and usage; lo
   for (const key of RESULT_KEYS) assert.ok(key in out, key);
   assert.equal(out.status, 'SUCCESS');
   assert.equal(out.buildId, 'b-1');
-  assert.deepEqual(out.images, [{ name: 'x/hello:v1', digest: 'sha256:aa' }]);
+  assert.deepEqual(out.images, [{ name: `${AR}/hello:v1`, digest: 'sha256:aa' }, { name: `${AR}/hello:latest`, digest: 'sha256:aa' }], 'untagged duplicate dropped');
   assert.equal(out.durationSec, 120);
   assert.equal(out.logFile, null);
   assert.equal(out.exitCode, 0);
@@ -254,12 +247,8 @@ test('first Ctrl-C cancels the build and exits 130; JSON still printed', async (
       return [{}];
     },
   };
-  const storage = {
-    bucket: () => ({
-      upload: async () => [{}, {}],
-      file: () => ({ download: async () => Promise.reject(Object.assign(new Error('404'), { code: 404 })) }),
-    }),
-  };
+  const { storage } = gcsLogStorage(() => 404);
+  storage.bucket = () => ({ upload: async () => [{}, {}] });
   const d = deps({
     env,
     homeDir: home,

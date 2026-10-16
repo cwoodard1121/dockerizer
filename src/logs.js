@@ -12,10 +12,49 @@ const TERMINAL_LINE = /^(DONE|ERROR\b.*)$/;
 /** Promise-based sleep. */
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * A function that returns the bytes of a Cloud Storage object from `start` onwards.
+ *
+ * It calls the JSON API with a Range header through the Storage client's auth client: one plain
+ * request per poll, no retries. We deliberately do not use `file.download()`: that goes through the
+ * library's streaming and retry machinery (teeny-request + retry-request), which re-pipes each retry
+ * of a failed request into the same PassThrough. Polling every 1.5s against an object that is not there
+ * yet (404), has nothing new (416) or is busy (429/503) built up error listeners on that stream
+ * (MaxListenersExceededWarning), and a retried 503 can even crash with ERR_STREAM_UNABLE_TO_PIPE.
+ *
+ * @param {import('@google-cloud/storage').Storage} storage
+ * @param {string} bucket
+ * @param {string} object
+ * @returns {(start: number) => Promise<Buffer>} Rejects with `err.code` set to the HTTP status.
+ */
+export function createRangeReader(storage, bucket, object) {
+  const base = (storage.apiEndpoint || 'https://storage.googleapis.com').replace(/\/+$/, '');
+  const url = `${base}/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(object)}?alt=media`;
+  return async (start) => {
+    let res;
+    try {
+      res = await storage.authClient.request({
+        url,
+        headers: { Range: `bytes=${start}-`, 'Accept-Encoding': 'identity' },
+        responseType: 'arraybuffer',
+        retry: false,
+      });
+    } catch (err) {
+      const status = err?.response?.status ?? err?.status;
+      if (typeof status === 'number') err.code = status;
+      throw err;
+    }
+    const buf = Buffer.from(res.data);
+    // A server that ignores Range answers 200 with the whole object.
+    return res.status === 200 && start > 0 ? buf.subarray(start) : buf;
+  };
+}
+
 export class LogTailer {
   /**
    * @param {object} opts
-   * @param {import('@google-cloud/storage').Storage} opts.storage Injected Storage client.
+   * @param {import('@google-cloud/storage').Storage} [opts.storage] Storage client (used to build the reader).
+   * @param {(start: number) => Promise<Buffer>} [opts.reader] Range reader; defaults to createRangeReader(storage, ...).
    * @param {string} opts.bucket Logs bucket name (no gs://).
    * @param {string} opts.buildId
    * @param {(text: string) => void} opts.onText Receives each new chunk of log text.
@@ -25,8 +64,8 @@ export class LogTailer {
    * @param {number} [opts.intervalMs=1500]
    * @param {number} [opts.ringSize=200] How many trailing lines to keep for error reports.
    */
-  constructor({ storage, bucket, buildId, onText, logFile, onWarn = () => {}, sleep: sleepFn = sleep, intervalMs = 1500, ringSize = 200 }) {
-    this.file = storage.bucket(bucket).file(`log-${buildId}.txt`);
+  constructor({ storage, reader, bucket, buildId, onText, logFile, onWarn = () => {}, sleep: sleepFn = sleep, intervalMs = 1500, ringSize = 200 }) {
+    this.read = reader || createRangeReader(storage, bucket, `log-${buildId}.txt`);
     this.onText = onText;
     this.logFile = logFile;
     this.onWarn = onWarn;
@@ -52,7 +91,7 @@ export class LogTailer {
     if (this.disabled) return 0;
     let buf;
     try {
-      [buf] = await this.file.download({ start: this.offset, validation: false });
+      buf = await this.read(this.offset);
     } catch (err) {
       // 404: log object not created yet. 416: no bytes past our offset yet.
       if (err?.code === 404 || err?.code === 416 || isTransient(err)) return 0;

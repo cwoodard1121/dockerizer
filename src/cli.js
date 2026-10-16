@@ -286,6 +286,7 @@ export async function run(argv, deps = {}) {
       region: cfg.region,
       logFile,
       tail: tailer.tail(50),
+      refs: image.refs,
       fallbackDurationSec: (Date.now() - started) / 1000,
     });
     if (summary.status === 'SUCCESS') fs.rmSync(logFile, { force: true });

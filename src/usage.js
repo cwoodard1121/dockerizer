@@ -16,6 +16,8 @@ const CACHE_IDS_KEPT = 200;
 const round = (n, places = 2) => Math.round(n * 10 ** places) / 10 ** places;
 const num = (n) => Math.round(n).toLocaleString('en-US');
 const usd = (n) => `$${n.toFixed(2)}`;
+/** Minutes for the one-line summary: one decimal below 10 so a short build doesn't read as 0. */
+const minutes = (n) => (n > 0 && n < 9.95 ? n.toFixed(1).replace(/\.0$/, '') : num(n));
 
 /**
  * Calendar month in UTC.
@@ -161,7 +163,7 @@ export async function fetchBuildTotals({ cloudBuild, project, region, range }) {
   const filter = `create_time>="${iso(range.start)}" AND create_time<"${iso(range.end)}"`;
   const builds = [];
   try {
-    for await (const build of cloudBuild.listBuildsAsync({ projectId: project, parent: `projects/${project}/locations/${region}`, filter, pageSize: 100 })) {
+    for await (const build of cloudBuild.listBuildsAsync({ projectId: project, parent: `projects/${project}/locations/${region}`, filter, pageSize: 100 }, { autoPaginate: false })) {
       builds.push(build);
     }
   } catch (err) {
@@ -191,8 +193,8 @@ export async function fetchRepoSize({ auth, project, region, repo }) {
  * @returns {string}
  */
 export function usageLine(u, { partial = false } = {}) {
-  const base = `Cloud Build: ${num(u.minutesUsed)} / ${num(FREE_BUILD_MINUTES)} free min this month`;
-  const tail = partial ? ' (counted since the last `dockeriser usage`; run it for the full month)' : '';
+  const base = `Cloud Build: ${minutes(u.minutesUsed)} / ${num(FREE_BUILD_MINUTES)} free min this month`;
+  const tail = partial ? ' (run `dockeriser usage` for the full month)' : '';
   if (u.overageMinutes > 0) return `${base}, over by ${num(u.overageMinutes)} min ≈ ${usd(u.costSoFarUsd)}${tail}`;
   return `${base} (${Math.round((u.minutesUsed / FREE_BUILD_MINUTES) * 100)}%)${tail}`;
 }

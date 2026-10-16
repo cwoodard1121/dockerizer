@@ -353,8 +353,20 @@ try {
     Write-Ok 'installed dockeriser''s Node packages'
   }
   Write-Host ''
-  & node (Join-Path $RepoRoot 'bin\dockeriser.js') login
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  # Fresh permission grants take a minute or two to spread through Google, so the first check can
+  # fail with "Google did not accept the credentials". Retry for up to ~3 minutes before giving up.
+  $cli = Join-Path $RepoRoot 'bin\dockeriser.js'
+  $attempts = 13
+  for ($i = 1; $i -le $attempts; $i++) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $loginOut = & node $cli login 2>&1; $loginCode = $LASTEXITCODE } finally { $ErrorActionPreference = $previous }
+    if ($loginCode -eq 0 -or $i -eq $attempts) { break }
+    Write-Host "  waiting for Google to apply the new permissions$([char]0x2026)" -ForegroundColor DarkGray
+    Start-Sleep -Seconds 15
+  }
+  $loginOut | ForEach-Object { Write-Host "$_" }
+  if ($loginCode -ne 0) { exit $loginCode }
   Write-Host ''
   Write-Host 'Try a build:'
   Write-Host "  node `"$(Join-Path $RepoRoot 'bin\dockeriser.js')`" build `"$(Join-Path $RepoRoot 'examples\hello')`" --image hello"

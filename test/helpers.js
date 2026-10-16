@@ -30,5 +30,29 @@ export function sink() {
 /** Yield to the event loop (lets polling loops interleave in tests). */
 export const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+/**
+ * Fake Storage for the log tailer: answers the JSON-API range requests made through
+ * `storage.authClient.request`. `contents(callNumber, start)` returns the whole object so far
+ * (string), or an HTTP status number to fail with (404, 403, 503...).
+ */
+export function gcsLogStorage(contents) {
+  const calls = [];
+  const storage = {
+    authClient: {
+      request: async ({ url, headers }) => {
+        const start = Number(headers.Range.match(/bytes=(\d+)-/)[1]);
+        const [, bucket, name] = url.match(/\/b\/([^/]+)\/o\/([^?]+)/);
+        calls.push({ bucket, name: decodeURIComponent(name), start });
+        const text = contents(calls.length, start);
+        if (typeof text === 'number') throw Object.assign(new Error(`HTTP ${text}`), { response: { status: text } });
+        const buf = Buffer.from(text);
+        if (start >= buf.length) throw Object.assign(new Error('HTTP 416'), { response: { status: 416 } });
+        return { status: 206, data: buf.subarray(start) };
+      },
+    },
+  };
+  return { storage, calls };
+}
+
 /** Protobuf-style timestamp. */
 export const ts = (iso) => ({ seconds: String(Math.floor(Date.parse(iso) / 1000)), nanos: 0 });

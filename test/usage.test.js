@@ -98,8 +98,9 @@ test('Artifact Registry storage against 0.5 GiB free', () => {
 test('fetchBuildTotals pages through listBuildsAsync with a create_time filter', async () => {
   let request;
   const cloudBuild = {
-    async *listBuildsAsync(req) {
+    async *listBuildsAsync(req, options) {
       request = req;
+      assert.deepEqual(options, { autoPaginate: false }, 'no AutopaginateTrueWarning');
       yield build('a', '2026-10-03T00:00:00Z', 120);
       yield build('b', '2026-10-04T00:00:00Z', 60);
     },
@@ -135,5 +136,13 @@ test('cache: incremental update after each build, no double counting, month roll
   assert.equal(rolled.month, '2026-11');
   assert.equal(rolled.seconds, 60);
   assert.equal(rolled.partial, true);
-  assert.match(summaryFromCache(rolled, { now: nextMonth }).line, /run it for the full month/);
+  assert.match(summaryFromCache(rolled, { now: nextMonth }).line, /\(run `dockeriser usage` for the full month\)$/);
+});
+
+test('first build with no cache shows the minutes of that build, not 0', () => {
+  const now = new Date('2026-10-16T12:00:00Z');
+  const cache = recordBuild(null, { buildId: 'b', build: build('b', '2026-10-16T11:59:00Z', 11), project: 'p', region: 'r', now });
+  assert.equal(summaryFromCache(cache, { now }).line, 'Cloud Build: 0.2 / 2,500 free min this month (0%) (run `dockeriser usage` for the full month)');
+  assert.equal(usageLine({ minutesUsed: 9.96, overageMinutes: 0 }), 'Cloud Build: 10 / 2,500 free min this month (0%)');
+  assert.equal(usageLine({ minutesUsed: 3, overageMinutes: 0 }), 'Cloud Build: 3 / 2,500 free min this month (0%)');
 });

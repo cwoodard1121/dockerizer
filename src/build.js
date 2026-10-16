@@ -259,9 +259,11 @@ export function failureInfo(build) {
  * @param {string} ctx.region
  * @param {string|null} [ctx.logFile] Saved full log (failures only).
  * @param {string[]} [ctx.tail] Last log lines.
+ * @param {string[]} [ctx.refs] Requested image:tag refs; other entries in results.images (such as the
+ *   untagged repository name Cloud Build also reports) are dropped.
  * @param {number} [ctx.fallbackDurationSec] Used when the API timestamps are missing.
  */
-export function summarizeBuild(build, { project, region, logFile = null, tail = [], fallbackDurationSec }) {
+export function summarizeBuild(build, { project, region, logFile = null, tail = [], refs, fallbackDurationSec }) {
   const status = statusName(build.status);
   const start = tsSeconds(build.startTime) ?? tsSeconds(build.createTime);
   const finish = tsSeconds(build.finishTime);
@@ -271,7 +273,9 @@ export function summarizeBuild(build, { project, region, logFile = null, tail = 
   return {
     status,
     buildId: build.id,
-    images: (build.results?.images || []).map((img) => ({ name: img.name, digest: img.digest })),
+    images: (build.results?.images || [])
+      .filter((img) => !refs || refs.includes(img.name))
+      .map((img) => ({ name: img.name, digest: img.digest })),
     durationSec,
     buildMinutes: Math.round((exactSec / 60) * 100) / 100, // billed per second, see docs/RESEARCH.md
     consoleUrl: consoleUrl(region, build.id, project),

@@ -282,7 +282,16 @@ if [[ ! -d "$REPO_ROOT/node_modules" ]]; then
   ok "installed dockeriser's Node packages"
 fi
 echo
-node "$REPO_ROOT/bin/dockeriser.js" login
+# Fresh permission grants take a minute or two to spread through Google, so the first check can
+# fail with "Google did not accept the credentials". Retry for up to ~3 minutes before giving up.
+for attempt in $(seq 1 13); do
+  if LOGIN_OUT="$(node "$REPO_ROOT/bin/dockeriser.js" login 2>&1)"; then LOGIN_CODE=0; else LOGIN_CODE=$?; fi
+  [[ $LOGIN_CODE -eq 0 || $attempt -eq 13 ]] && break
+  printf '\033[90m  waiting for Google to apply the new permissions\xe2\x80\xa6\033[0m\n'
+  sleep 15
+done
+printf '%s\n' "$LOGIN_OUT"
+[[ $LOGIN_CODE -eq 0 ]] || exit "$LOGIN_CODE"
 echo
 echo "Try a build:"
 echo "  node \"$REPO_ROOT/bin/dockeriser.js\" build \"$REPO_ROOT/examples/hello\" --image hello"
