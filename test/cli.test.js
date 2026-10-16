@@ -1,0 +1,264 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { run } from '../src/cli.js';
+import { readUsageCache } from '../src/usage.js';
+import { buildContext } from '../plugin/hooks/session-start.js';
+import { sink, tempTree, tick, ts } from './helpers.js';
+
+const REPO = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const HELLO = path.join(REPO, 'examples', 'hello');
+const RESULT_KEYS = ['status', 'buildId', 'images', 'durationSec', 'consoleUrl', 'logFile', 'failedStep', 'failureInfo', 'errorTail'];
+
+/** A home folder that looks fully set up (config + key file), plus an env with no real credentials. */
+function setUpHome() {
+  const home = tempTree({
+    '.dockeriser/config.json': JSON.stringify({ project: 'demo-proj', region: 'northamerica-northeast2', repo: 'docker-images' }),
+    '.dockeriser/key.json': JSON.stringify({ type: 'service_account' }),
+  });
+  return { home, env: { APPDATA: tempTree({}), PATH: '', NO_COLOR: '1' } };
+}
+
+/** Mock clients that run one build through QUEUED -> WORKING -> final. */
+function mockClients(final, logText) {
+  const calls = { upload: [], create: [], get: 0, cancel: 0 };
+  let polls = 0;
+  const cloudBuild = {
+    createBuild: async (req) => {
+      calls.create.push(req);
+      return [{ metadata: { build: { id: 'b-1', name: 'projects/demo-proj/locations/northamerica-northeast2/builds/b-1' } } }];
+    },
+    getBuild: async () => {
+      calls.get++;
+      polls++;
+      if (polls === 1) return [{ id: 'b-1', status: 'QUEUED' }];
+      if (polls === 2) return [{ id: 'b-1', status: 'WORKING' }];
+      return [{ id: 'b-1', startTime: ts('2026-10-16T10:00:00Z'), finishTime: ts('2026-10-16T10:02:00Z'), options: {}, ...final }];
+    },
+    cancelBuild: async () => {
+      calls.cancel++;
+      return [{}];
+    },
+  };
+  const storage = {
+    bucket: (name) => ({
+      upload: async (file, opts) => {
+        calls.upload.push({ name, file, opts, exists: fs.existsSync(file) });
+        return [{}, { generation: '7' }];
+      },
+      file: () => ({
+        download: async ({ start }) => {
+          const buf = Buffer.from(logText);
+          if (start >= buf.length) throw Object.assign(new Error('416'), { code: 416 });
+          return [buf.subarray(start)];
+        },
+      }),
+    }),
+  };
+  return { calls, createClients: async () => ({ cloudBuild, storage }) };
+}
+
+const deps = (extra) => ({
+  stdout: sink(),
+  stderr: sink(),
+  sleep: tick,
+  onSigint: () => () => {},
+  now: () => new Date('2026-10-16T10:05:00Z'),
+  ...extra,
+});
+
+test('build --json success: one JSON object on stdout with digests and usage; logs on stderr', async () => {
+  const { home, env } = setUpHome();
+  const tmpDir = tempTree({});
+  const { calls, createClients } = mockClients(
+    { status: 'SUCCESS', results: { images: [{ name: 'x/hello:v1', digest: 'sha256:aa' }] } },
+    'Step #1: building\nDONE\n',
+  );
+  const d = deps({ env, homeDir: home, createClients, tmpDir });
+  const code = await run(['build', HELLO, '--image', 'hello:v1', '--json'], d);
+  assert.equal(code, 0);
+  const out = JSON.parse(d.stdout.text());
+  for (const key of RESULT_KEYS) assert.ok(key in out, key);
+  assert.equal(out.status, 'SUCCESS');
+  assert.equal(out.buildId, 'b-1');
+  assert.deepEqual(out.images, [{ name: 'x/hello:v1', digest: 'sha256:aa' }]);
+  assert.equal(out.durationSec, 120);
+  assert.equal(out.logFile, null);
+  assert.equal(out.exitCode, 0);
+  assert.equal(out.usage.minutesUsed, 2);
+  assert.match(out.usage.line, /^Cloud Build: 2 \/ 2,500 free min this month/);
+  assert.match(d.stderr.text(), /Step #1: building/);
+
+  assert.equal(calls.upload[0].name, 'demo-proj-dockeriser-src');
+  assert.equal(calls.upload[0].exists, true);
+  assert.equal(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tgz')).length, 0, 'tarball deleted after upload');
+  const req = calls.create[0];
+  assert.equal(req.build.source.storageSource.generation, '7');
+  assert.equal(req.build.logsBucket, 'gs://demo-proj-dockeriser-logs');
+  assert.equal(readUsageCache(home).seconds, 120);
+});
+
+test('build --json failure: failed step, failure info, tail and saved log; exit 1', async () => {
+  const { home, env } = setUpHome();
+  const tmpDir = tempTree({});
+  const { createClients } = mockClients(
+    {
+      status: 'FAILURE',
+      failureInfo: { type: 'USER_BUILD_STEP', detail: 'step 1 failed' },
+      steps: [{ name: 'gcr.io/cloud-builders/docker', status: 'SUCCESS' }, { id: 'build', name: 'gcr.io/cloud-builders/docker', args: ['build'], status: 'FAILURE' }],
+    },
+    'Step #1: RUN false\nERROR\n',
+  );
+  const d = deps({ env, homeDir: home, createClients, tmpDir });
+  const code = await run(['build', HELLO, '--image', 'hello', '--json'], d);
+  assert.equal(code, 1);
+  const out = JSON.parse(d.stdout.text());
+  assert.equal(out.status, 'FAILURE');
+  assert.equal(out.failedStep.index, 1);
+  assert.equal(out.failureInfo.type, 'USER_BUILD_STEP');
+  assert.deepEqual(out.errorTail, ['Step #1: RUN false', 'ERROR']);
+  assert.equal(out.logFile, path.join(tmpDir, 'dockeriser-b-1.log'));
+  assert.equal(fs.readFileSync(out.logFile, 'utf8'), 'Step #1: RUN false\nERROR\n');
+});
+
+test('human failure output shows the block with console URL and log path', async () => {
+  const { home, env } = setUpHome();
+  const { createClients } = mockClients({ status: 'TIMEOUT' }, 'slow\n');
+  const d = deps({ env, homeDir: home, createClients, tmpDir: tempTree({}) });
+  assert.equal(await run(['build', HELLO, '--image', 'hello'], d), 1);
+  const text = d.stdout.text();
+  assert.match(text, /BUILD TIMEOUT/);
+  assert.match(text, /console: +https:\/\/console\.cloud\.google\.com\/cloud-build\/builds;region=northamerica-northeast2\/b-1\?project=demo-proj/);
+  assert.match(text, /full log: +.*dockeriser-b-1\.log/);
+  assert.match(text, /Cloud Build: 2 \/ 2,500 free min this month/);
+});
+
+test('config error in --json mode prints an ERROR object and exits 2 without touching the network', async () => {
+  const d = deps({ env: { APPDATA: tempTree({}) }, homeDir: tempTree({}), createClients: async () => assert.fail('no network') });
+  const code = await run(['build', HELLO, '--image', 'hello', '--json'], d);
+  assert.equal(code, 2);
+  const out = JSON.parse(d.stdout.text());
+  assert.equal(out.status, 'ERROR');
+  assert.equal(out.error.type, 'ConfigError');
+  for (const key of RESULT_KEYS) assert.ok(key in out, key);
+});
+
+test('no credentials: exit 3 before packaging; dry run needs none', async () => {
+  const home = tempTree({ '.dockeriser/config.json': '{"project":"demo-proj"}' });
+  const d = deps({ env: { APPDATA: tempTree({}) }, homeDir: home, createClients: async () => assert.fail('no network') });
+  assert.equal(await run(['build', HELLO, '--image', 'hello'], d), 3);
+  assert.match(d.stderr.text(), /No Google credentials found/);
+
+  const dry = deps({ env: { APPDATA: tempTree({}) }, homeDir: home, createClients: async () => assert.fail('no network') });
+  assert.equal(await run(['build', HELLO, '--image', 'hello', '--dry-run'], dry), 0);
+  const req = JSON.parse(dry.stdout.text());
+  assert.equal(req.build.serviceAccount, 'projects/demo-proj/serviceAccounts/dockeriser@demo-proj.iam.gserviceaccount.com');
+});
+
+test('status --offline is fast, never builds clients, and reports cached usage', async () => {
+  const { home, env } = setUpHome();
+  fs.writeFileSync(
+    path.join(home, '.dockeriser', 'usage-cache.json'),
+    JSON.stringify({ version: 1, month: '2026-10', project: 'demo-proj', region: 'northamerica-northeast2', seconds: 312 * 60, otherSeconds: 0, builds: 20, countedIds: [], partial: false }),
+  );
+  const d = deps({ env, homeDir: home, createClients: async () => assert.fail('status --offline must not create clients') });
+  const started = performance.now();
+  const code = await run(['status', '--offline', '--json'], d);
+  const elapsed = performance.now() - started;
+  assert.equal(code, 0);
+  assert.ok(elapsed < 300, `took ${elapsed} ms`);
+  const out = JSON.parse(d.stdout.text());
+  assert.equal(out.configured, true);
+  assert.equal(out.credentials.present, true);
+  assert.equal(out.project, 'demo-proj');
+  assert.equal(out.usageLine, 'Cloud Build: 312 / 2,500 free min this month (12%)');
+});
+
+test('doctor with no credentials: readable failing checks, skips network, non-zero exit', async () => {
+  const d = deps({ env: { APPDATA: tempTree({}), NO_COLOR: '1' }, homeDir: tempTree({}), createClients: async () => assert.fail('no network') });
+  const code = await run(['doctor'], d);
+  assert.notEqual(code, 0);
+  const text = d.stdout.text();
+  assert.match(text, /\[FAIL\] Config/);
+  assert.match(text, /\[FAIL\] Credentials/);
+  assert.match(text, /\[skip\] Cloud Build API/);
+  assert.doesNotMatch(text + d.stderr.text(), /at .*\.js:\d+/);
+});
+
+test('usage with no credentials gives a readable error and non-zero exit', async () => {
+  const home = tempTree({ '.dockeriser/config.json': '{"project":"demo-proj"}' });
+  const d = deps({ env: { APPDATA: tempTree({}) }, homeDir: home, createClients: async () => assert.fail('no network') });
+  assert.equal(await run(['usage'], d), 3);
+  assert.match(d.stderr.text(), /No Google credentials found/);
+});
+
+test('session-start hook: not-signed-in context when unconfigured', async () => {
+  const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env: { APPDATA: tempTree({}), PATH: '' }, homeDir: tempTree({}) });
+  assert.match(text, /^dockeriser \(Docker builds on Google Cloud Build\) is not signed in\. Don't run local `docker build`\. Tell Cameron to run:/);
+  assert.match(text, /winget install Google\.CloudSDK/);
+  assert.match(text, /setup\.ps1" -Project <your-project-id>/);
+});
+
+test('session-start hook: one line with the usage when configured', async () => {
+  const { home, env } = setUpHome();
+  fs.writeFileSync(
+    path.join(home, '.dockeriser', 'usage-cache.json'),
+    JSON.stringify({ version: 1, month: new Date().toISOString().slice(0, 7), project: 'demo-proj', region: 'northamerica-northeast2', seconds: 600, otherSeconds: 0, builds: 1, countedIds: [], partial: false }),
+  );
+  const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env, homeDir: home });
+  assert.match(text, /^Docker builds: use dockeriser, not local docker build \(node ".*bin\/dockeriser\.js" build <dir> --image <name> --json\)\. Cloud Build: 10 \/ 2,500 free min this month \(0%\)$/);
+  assert.equal(text.includes('\n'), false);
+});
+
+test('unknown commands and flags exit 2', async () => {
+  const d = deps({});
+  assert.equal(await run(['frobnicate'], d), 2);
+  assert.equal(await run(['build', '--bogus'], deps({})), 2);
+  const h = deps({});
+  assert.equal(await run(['--help'], h), 0);
+  assert.match(h.stdout.text(), /dockeriser build <dir> --image/);
+});
+
+test('first Ctrl-C cancels the build and exits 130; JSON still printed', async () => {
+  const { home, env } = setUpHome();
+  let handler;
+  let cancelled = false;
+  const cloudBuild = {
+    createBuild: async () => [{ metadata: { build: { id: 'b-2' } } }],
+    getBuild: async () => {
+      if (!cancelled) {
+        handler(); // simulate Ctrl-C while the build runs
+        return [{ id: 'b-2', status: 'WORKING' }];
+      }
+      return [{ id: 'b-2', status: 'CANCELLED', startTime: ts('2026-10-16T10:00:00Z'), finishTime: ts('2026-10-16T10:00:30Z') }];
+    },
+    cancelBuild: async (req) => {
+      assert.equal(req.name, 'projects/demo-proj/locations/northamerica-northeast2/builds/b-2');
+      cancelled = true;
+      return [{}];
+    },
+  };
+  const storage = {
+    bucket: () => ({
+      upload: async () => [{}, {}],
+      file: () => ({ download: async () => Promise.reject(Object.assign(new Error('404'), { code: 404 })) }),
+    }),
+  };
+  const d = deps({
+    env,
+    homeDir: home,
+    tmpDir: tempTree({}),
+    createClients: async () => ({ cloudBuild, storage }),
+    onSigint: (h) => ((handler = h), () => {}),
+    exit: () => assert.fail('first Ctrl-C must not exit immediately'),
+  });
+  const code = await run(['build', HELLO, '--image', 'hello', '--json'], d);
+  assert.equal(code, 130);
+  assert.equal(cancelled, true);
+  assert.match(d.stderr.text(), /cancelling build/);
+  const out = JSON.parse(d.stdout.text());
+  assert.equal(out.status, 'CANCELLED');
+  assert.equal(out.exitCode, 130);
+});

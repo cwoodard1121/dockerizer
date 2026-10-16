@@ -1,0 +1,16 @@
+{
+  "description": "dockeriser: on session start, tell the agent (offline, no network) whether Cloud Build sign-in is done and how much of the free build-minutes are used.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

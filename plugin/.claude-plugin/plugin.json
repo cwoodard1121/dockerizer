@@ -1,0 +1,11 @@
+{
+  "name": "dockeriser",
+  "version": "0.1.0",
+  "description": "Build Docker images on Google Cloud Build instead of local docker build: packages a folder, streams the build log, pushes to Artifact Registry, and tracks free build-minutes. Includes sign-in and usage commands and a session-start status note.",
+  "author": {
+    "name": "cwoodard1121"
+  },
+  "repository": "https://github.com/cwoodard1121/dockerizer",
+  "license": "MIT",
+  "keywords": ["docker", "cloud-build", "artifact-registry", "gcp"]
+}

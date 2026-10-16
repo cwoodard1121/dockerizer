@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "dockerizer",
+  "owner": {
+    "name": "cwoodard1121"
+  },
+  "metadata": {
+    "description": "dockeriser: Docker builds on Google Cloud Build for Claude Code agents."
+  },
+  "plugins": [
+    {
+      "name": "dockeriser",
+      "source": "./plugin",
+      "description": "Use Google Cloud Build instead of local docker build, with sign-in steps, free-minute usage tracking and a session-start status note.",
+      "category": "development"
+    }
+  ]
+}

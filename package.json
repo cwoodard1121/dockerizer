@@ -1,0 +1,18 @@
+{
+  "name": "dockeriser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "dockeriser": "bin/dockeriser.js" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test",
+    "start": "node bin/dockeriser.js"
+  },
+  "dependencies": {
+    "@google-cloud/cloudbuild": "6.2.0",
+    "@google-cloud/storage": "8.4.0",
+    "ignore": "7.0.12",
+    "tar": "7.5.22"
+  }
+}
