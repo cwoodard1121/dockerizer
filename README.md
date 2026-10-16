@@ -18,12 +18,32 @@ Cloud account. Normal use fits in Google's free 2,500 build-minutes a month.
    ```
    powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"
    ```
+   In Claude Code, `/dockeriser:setup` does this step for you: it asks in chat which project to use, then
+   runs the script. Either way a browser opens for the Google sign-in. At the end the script may print
+   "waiting for Google to apply the new permissions…" for up to about 3 minutes; that is normal.
 3. Try a build:
    ```
    node bin\dockeriser.js build examples\hello --image hello
    ```
+   The first real build took 11 seconds and used about 0.2 of the 2,500 free minutes.
 
 The same steps with copy buttons: [docs/setup.html](docs/setup.html).
+
+### Slash commands (Claude Code)
+
+After the plugin is installed (see [Claude Code plugin](#claude-code-plugin)):
+
+| Command | What it does |
+|---|---|
+| `/dockeriser:build [dir] [image]` | Builds on Cloud Build and pushes. `dir` defaults to the current project folder, `image` to the folder name. Shows the live log, then the image address and digest, minutes used and the usage line; on failure, the failed step, the error lines and the full log file. |
+| `/dockeriser:setup [project-id]` | Asks in chat which project to use (lists yours, or offers to create one), then runs the setup script. |
+| `/dockeriser:doctor` | Online check of every piece of setup; explains each failure and its fix. |
+| `/dockeriser:status` | Instant local check (no network): set up or not, and this month's usage line. |
+| `/dockeriser:usage` | Free build-minutes used this month, the month-end projection, any estimated cost and image storage. |
+| `/dockeriser:login` | What's left to do to sign in, if anything. |
+
+Each one finds the dockeriser folder the same way the session hook does and runs `npm install` there the
+first time.
 
 ### What the script does
 
@@ -35,8 +55,29 @@ The same steps with copy buttons: [docs/setup.html](docs/setup.html).
 - Lets dockeriser sign in as that account (one more browser sign-in, no password files).
 - Checks everything at the end. Safe to run again any time; it only fixes what's missing.
 
-More detail, the click-through version, key files for headless machines, and the full permissions list:
-[docs/SETUP.md](docs/SETUP.md).
+More detail, the click-through version, key files for headless machines (advanced), and the full
+permissions list: [docs/SETUP.md](docs/SETUP.md).
+
+## Getting the image
+
+A build pushes the image to Artifact Registry by itself and prints its full address with the digest,
+for example `northamerica-northeast2-docker.pkg.dev/<project>/docker-images/hello:v1@sha256:…`. Nothing
+is downloaded to your PC.
+
+- **On a PC signed in to gcloud** (already done on Cameron's MSI): run this once, then pull by address:
+  ```
+  gcloud auth configure-docker northamerica-northeast2-docker.pkg.dev
+  docker pull <address>
+  ```
+- **On a server or droplet** (no gcloud sign-in): make a service account with only
+  `roles/artifactregistry.reader` on the `docker-images` repo, create a key for it, copy the key to the
+  server, and there run:
+  ```
+  cat key.json | docker login -u _json_key --password-stdin https://northamerica-northeast2-docker.pkg.dev
+  docker pull <address>
+  ```
+
+dockeriser doesn't SSH anywhere or deploy anything; running the image on a server is a separate step.
 
 ### Check usage
 
@@ -111,7 +152,7 @@ Dockerfile is always included.
   "failedStep": null,           // on failure: { index, id, name, status, args }
   "failureInfo": null,          // on failure: { type, detail, hint? }
   "errorTail": [],              // on failure: last 50 log lines
-  "usage": { "line": "Cloud Build: 312 / 2,500 free min this month (12%)", "minutesUsed": 312.4, "percent": 12.5, … },
+  "usage": { "line": "Cloud Build: 0.2 / 2,500 free min this month (0%)", "minutesUsed": 0.18, "percent": 0, … },
   "error": { "type": "ConfigError", "message": "…", "fix": "…" }   // only when status is "ERROR"
 }
 ```
@@ -131,16 +172,20 @@ billing account. The real bill: https://console.cloud.google.com/billing. Prices
 
 ## Claude Code plugin
 
-`plugin/` is a Claude Code plugin: a `dockeriser` skill (use this instead of local `docker build`),
-`/dockeriser:login`, `/dockeriser:usage`, and a SessionStart hook that tells each session, offline,
-whether dockeriser is signed in and how many free minutes are used.
+`plugin/` is a Claude Code plugin: a `dockeriser` skill (agents use it instead of local `docker build`),
+the six [slash commands](#slash-commands-claude-code), and a SessionStart hook that tells each session,
+offline, whether dockeriser is signed in and how many free minutes are used.
 
-Install from GitHub:
+Install from GitHub by typing these in Claude Code:
 
 ```
-claude plugin marketplace add cwoodard1121/dockerizer
-claude plugin install dockeriser@dockerizer
+/plugin marketplace add cwoodard1121/dockerizer
+/plugin install dockeriser@dockerizer
+/reload-plugins
 ```
+
+To get a newer version later: `/plugin update dockeriser@dockerizer`, then `/reload-plugins`. The slash
+commands run `plugin/scripts/run.js`, which finds the CLI as below and runs it.
 
 **How the hook finds the CLI.** Claude Code copies only the plugin folder into
 `<config>/plugins/cache/dockerizer/dockeriser/<version>/`, so the folder above the plugin there is not a

@@ -8,17 +8,21 @@ description: Use instead of local Docker whenever you would "docker build", "bui
 Do not run local `docker build` or `docker push` on this machine. Build with dockeriser, which runs
 the build on Google Cloud Build (free tier: 2,500 build-minutes a month) and pushes to Artifact Registry.
 
-The CLI path is in the session-start note ("node \"<path>\" build ..."). If there is no note, use
-`C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js`. Below, `CLI` means that path.
+Run the CLI through the plugin launcher: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js"` (called `CLI`
+below; it finds the dockeriser folder and runs `npm install` there the first time). If
+`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the path from the session-start note, or
+`node "C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js"`.
+`/dockeriser:build` does all of this for one folder.
 
 ## 1. Check sign-in first (instant, no network)
 
 ```
-node CLI status --offline --json
+CLI status --offline --json
 ```
 
-If `ready` is `false`, do NOT fall back to local docker. Setup is one command, which he runs himself
-because it opens the browser for Google sign-in. Tell Cameron to type, in the Claude prompt:
+If `ready` is `false`, do NOT fall back to local docker. Use `/dockeriser:setup` (asks for the project in
+chat, then runs the setup script; a browser opens for Google sign-in). Or tell Cameron to type, in the
+Claude prompt:
 
 ```
 ! powershell -ExecutionPolicy Bypass -File "<repo>\setup\setup.ps1" -Project <id>
@@ -32,7 +36,7 @@ step is `winget install Google.CloudSDK` and a new terminal. Then stop and wait 
 ## 2. Build
 
 ```
-node CLI build <dir> --image <name>[:<tag>] --json
+CLI build <dir> --image <name>[:<tag>] --json
 ```
 
 - `<dir>` holds the Dockerfile (or pass `--dockerfile path/relative/to/dir`).
@@ -58,7 +62,7 @@ node CLI build <dir> --image <name>[:<tag>] --json
   "failedStep": null,             // failures: {index, id, name, status, args}
   "failureInfo": null,            // failures: {type, detail, hint?}
   "errorTail": [],                // failures: last 50 log lines
-  "usage": { "line": "Cloud Build: 312 / 2,500 free min this month (12%)", "percent": 12.5, … },
+  "usage": { "line": "Cloud Build: 0.2 / 2,500 free min this month (0%)", "percent": 0, … },
   "error": { "type": "ConfigError", "message": "…", "fix": "…" }   // only when status is ERROR
 }
 ```
@@ -71,11 +75,22 @@ first; fix the Dockerfile or code and build again. `error.fix` says exactly what
 | 0 | success | use the image refs |
 | 1 | build failed (or unexpected error) | read errorTail / failedStep, fix, rebuild |
 | 2 | config or input problem (no project, bad flag, missing Dockerfile, API off) | follow `error.fix` |
-| 3 | credentials or permission problem | give Cameron the steps from `node CLI login` |
+| 3 | credentials or permission problem | give Cameron the steps from `CLI login` |
 | 4 | source upload failed | follow `error.fix` (usually re-run setup) |
 | 130 | interrupted; the build was cancelled | rebuild if still needed |
 
-## 4. After building
+## 4. Getting the image
+
+The build already pushed the image; nothing is pulled to this PC. Its address is
+`images[].name@digest`.
+
+- On a PC signed in to gcloud (Cameron's MSI already is): `gcloud auth configure-docker
+  northamerica-northeast2-docker.pkg.dev` once, then `docker pull <address>`.
+- On a server: a service account with only `roles/artifactregistry.reader` on the repo, a key for it copied
+  to the server, then `cat key.json | docker login -u _json_key --password-stdin
+  https://northamerica-northeast2-docker.pkg.dev` and `docker pull <address>`.
+
+## 5. After building
 
 If `usage.percent` is over 80 (or the line says "over by"), tell Cameron the usage line in one sentence.
 `/dockeriser:usage` gives the full picture.

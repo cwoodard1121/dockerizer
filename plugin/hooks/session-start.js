@@ -14,8 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const REPO_URL = 'https://github.com/cwoodard1121/dockerizer';
-const OWNER_CHECKOUT = 'C:/Users/camer/Desktop/Projects/dockeriser';
+export const REPO_URL = 'https://github.com/cwoodard1121/dockerizer';
+export const OWNER_CHECKOUT = 'C:/Users/camer/Desktop/Projects/dockeriser';
 
 /**
  * Candidate checkout folders, best first.

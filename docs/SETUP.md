@@ -22,8 +22,15 @@ machines instead of yours. You do it once. It takes about 5 minutes.
    node bin\dockeriser.js build examples\hello --image hello
    ```
 
-From Claude Code, type the step 2 command in the prompt with a leading `!` and add `-Project <your-id>`,
-since the script can't ask questions there.
+The first real build took 11 seconds and used about 0.2 of the 2,500 free minutes.
+
+**From Claude Code:** `/dockeriser:setup` does step 2 for you. It asks in chat which project to use
+(listing your projects if gcloud is signed in, or offering to create one), warns that a browser will open,
+then runs the script with `-Project <id>`. If gcloud is missing it tells you to type
+`! winget install Google.CloudSDK` and restart the terminal. You can also type the step 2 command
+yourself with a leading `!`, adding `-Project <your-id>`, since the script can't ask questions there.
+Install the plugin first: `/plugin marketplace add cwoodard1121/dockerizer`,
+`/plugin install dockeriser@dockerizer`, `/reload-plugins`.
 
 ## What you are setting up, in plain words
 
@@ -57,6 +64,9 @@ again is safe; it only does what is missing.
 7. **Lets dockeriser sign in as the robot account** (a second, one-time browser sign-in:
    `gcloud auth application-default login --impersonate-service-account=...`). No key file to lose.
 8. **Checks everything** by running `dockeriser login`, after installing the Node packages if needed.
+   Google takes a minute or two to apply new permissions, so on a first run this check can fail at
+   first. The script prints "waiting for Google to apply the new permissions…" and tries again every
+   15 seconds, for up to about 3 minutes. That is normal; leave it running.
 
 Options: `-Project <id>`, `-Region <region>` (default `northamerica-northeast2`, Toronto),
 `-BillingAccount <id>`, `-Budget <dollars>` (default 5, 0 = none), `-CreateKey` (see below).
@@ -70,6 +80,23 @@ For a headless machine with no browser (e.g. a dedicated agent box), add `-Creat
 a password: anyone who has it can build and push as the robot account. It lives outside the code folder on
 purpose, and `.gitignore` blocks `key.json` in case it gets copied in. Some organisations block key
 creation (policy `iam.disableServiceAccountKeyCreation`); then use the normal browser sign-in.
+
+## Getting the image
+
+Every build pushes the image to the `docker-images` repo by itself and prints the full address with
+its digest (`<region>-docker.pkg.dev/<project>/docker-images/<name>:<tag>@sha256:…`). Nothing is pulled
+to your PC.
+
+- **On a PC signed in to gcloud** (already done on Cameron's MSI), once:
+  `gcloud auth configure-docker northamerica-northeast2-docker.pkg.dev`. After that,
+  `docker pull <address>` works.
+- **On a server or droplet**, by hand: create a service account with only
+  `roles/artifactregistry.reader` on the `docker-images` repo, create a key for it, copy the key to the
+  server (keep it private, `chmod 600`), then on the server:
+  `cat key.json | docker login -u _json_key --password-stdin https://northamerica-northeast2-docker.pkg.dev`
+  and `docker pull <address>`.
+
+dockeriser itself doesn't SSH anywhere or deploy; running the image on a server is a separate step.
 
 ## Doing it by clicking instead (no script)
 

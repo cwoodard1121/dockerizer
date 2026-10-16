@@ -5,12 +5,14 @@ description: Show how much of the 2,500 free Cloud Build minutes dockeriser has 
 
 # dockeriser usage
 
-The CLI path is in the session-start note; if there is none use
-`C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js` (called `CLI` below).
+Run the CLI through the plugin launcher: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.js"` (called `CLI`
+below; it finds the dockeriser folder and runs `npm install` there the first time). If
+`${CLAUDE_PLUGIN_ROOT}` was not filled in, use `node "<path>"` with the path from the session-start note, or
+`node "C:/Users/camer/Desktop/Projects/dockeriser/bin/dockeriser.js"`.
 
-1. Run `node CLI usage --json` (add `--month YYYY-MM` if a past month was asked for).
+1. Run `CLI usage --json` (add `--month YYYY-MM` if a past month was asked for).
 2. If it exits non-zero, show the `error.message` and `error.fix`. For exit code 2 or 3, run
-   `node CLI login` and relay its steps instead.
+   `CLI login` and relay its steps instead.
 3. Otherwise summarise in at most five short lines, plain words:
    - minutes used out of 2,500 and the percent (`minutesUsed`, `percent`), minutes left
    - pace: `minutesPerDay`, projected month-end total (`projectedMinutes`), and `crossDate` if set

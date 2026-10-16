@@ -65,12 +65,13 @@ a { color: var(--accent); }
       <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File setup\setup.ps1</code><button type="button">Copy</button></div>
       <p class="note">Or from anywhere:</p>
       <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"</code><button type="button">Copy</button></div>
-      <p class="note">It sets up the project, billing, a $5 budget alert and everything else, then checks it all. Safe to run again. In Claude Code, type it with a leading <code>!</code> and add <code>-Project my-id</code>.</p>
+      <p class="note">It sets up the project, billing, a $5 budget alert and everything else, then checks it all. Safe to run again. Near the end it may show &ldquo;waiting for Google to apply the new permissions&hellip;&rdquo; for up to about 3 minutes; that is normal.</p>
+      <p class="note">In Claude Code, <code>/dockeriser:setup</code> does this step: it asks in chat which project to use, then runs the script.</p>
     </li>
     <li>
       <h2>Try a build</h2>
       <div class="cmd"><code class="block">node bin\dockeriser.js build examples\hello --image hello</code><button type="button">Copy</button></div>
-      <p class="note">You should see the build log stream in, then the image name and a line like <code>Cloud Build: 1 / 2,500 free min this month</code>.</p>
+      <p class="note">You should see the build log stream in, then the image address with its digest and a line like <code>Cloud Build: 0.2 / 2,500 free min this month (0%)</code>. The first real build took 11 seconds, about 0.2 minutes. In Claude Code: <code>/dockeriser:build examples\hello hello</code>.</p>
     </li>
   </ol>
 

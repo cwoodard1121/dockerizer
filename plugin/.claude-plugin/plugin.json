@@ -1,7 +1,7 @@
 {
   "name": "dockeriser",
-  "version": "0.1.0",
-  "description": "Build Docker images on Google Cloud Build instead of local docker build: packages a folder, streams the build log, pushes to Artifact Registry, and tracks free build-minutes. Includes sign-in and usage commands and a session-start status note.",
+  "version": "0.2.0",
+  "description": "Build Docker images on Google Cloud Build instead of local docker build: packages a folder, streams the build log, pushes to Artifact Registry, and tracks free build-minutes. Slash commands for build, setup, doctor, status, usage and login, plus a session-start status note.",
   "author": {
     "name": "cwoodard1121"
   },
