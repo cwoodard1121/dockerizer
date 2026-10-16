@@ -326,7 +326,18 @@ export function logsScript({ mode, name, compose = {}, services = [], tail = 100
 
 /** Remote command that runs `docker load` reading the archive from stdin. */
 export function loadCommand({ stateDir } = {}) {
-  return `bash -c ${shq(`${prelude({ stateDir })}$D load`)}`;
+  return remoteBash(`${prelude({ stateDir })}$D load`);
+}
+
+/**
+ * A remote command that runs `script` with bash while leaving stdin free for data (an image archive,
+ * a key). The script travels base64-encoded, so the ssh argument holds no quotes or newlines and
+ * survives Windows argument quoting, ssh and the remote login shell unchanged.
+ * @param {string} script
+ */
+export function remoteBash(script) {
+  const b64 = Buffer.from(script).toString('base64');
+  return `t=$(mktemp) && echo ${b64} | base64 -d > $t && bash $t; r=$?; rm -f $t; exit $r`;
 }
 
 /**

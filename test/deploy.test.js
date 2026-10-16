@@ -109,7 +109,12 @@ test('compose, load-only (with --then), pull transfer, rollback, logs and helper
   for (const script of [compose, loadOnly, rollback, probeScript({ refs: ['a:b'] }), logsScript({ mode: 'compose', compose: { dir: '/opt/app' }, services: ['api'], follow: true }), installPullerKeyScript({ registryHost: 'r-docker.pkg.dev' }), registryCheckScript({ probeRef: 'x/y:z' }), installDockerScript()]) {
     assert.deepEqual(bashSyntaxOk(script), { ok: true, err: '' });
   }
-  assert.match(loadCommand(), /^bash -c '/);
+  const lc = loadCommand();
+  assert.ok(/^t=\$\(mktemp\) && echo [A-Za-z0-9+/=]+ \| base64 -d > \$t && bash \$t; r=\$\?; rm -f \$t; exit \$r$/.test(lc), lc);
+  assert.ok(!/["'\n]/.test(lc), 'no quotes or newlines on the ssh command line');
+  const decoded = Buffer.from(lc.match(/echo (\S+)/)[1], 'base64').toString();
+  assert.match(decoded, /\$D load$/);
+  if (BASH) assert.deepEqual(bashSyntaxOk(decoded), { ok: true, err: '' });
 });
 
 test('rollback path really runs: a container that dies is replaced by the previous image', { skip: !BASH }, () => {
@@ -289,7 +294,7 @@ function mockSsh({ have = [], deployStdout, deployCode = 0 }) {
         const lines = ['@@dk user="root" sudo="none" arch="x86_64"', '@@dk docker="27.1.0"', '@@dk disk_kb="20000000"', ...have.map((i) => `@@dk have=${i} id="sha256:x"`)];
         return { code: 0, stdout: `${lines.join('\n')}\n`, stderr: '' };
       }
-      if (cmd.startsWith('bash -c ') && cmd.includes('$D load')) {
+      if (cmd.startsWith('t=$(mktemp)') && Buffer.from(cmd.match(/echo (\S+)/)[1], 'base64').toString().includes('$D load')) {
         calls.push('load');
         const chunks = [];
         for await (const c of input) chunks.push(c);

@@ -13,10 +13,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AuthError, ConfigError, DockeriserError } from './errors.js';
-import { installDockerScript, installPullerKeyScript, probeScript, registryCheckScript } from './remote.js';
+import { installDockerScript, installPullerKeyScript, probeScript, registryCheckScript, remoteBash } from './remote.js';
 import { runScript } from './deploy.js';
 import { checkServerName, resolveServer, saveServer } from './servers.js';
-import { checkHost, shq, sshError } from './ssh.js';
+import { checkHost, sshError } from './ssh.js';
 import { findGcloud } from './status.js';
 
 export const PULLER_ID = 'dockeriser-puller';
@@ -145,7 +145,7 @@ export async function addServer({ name, flags, homeDir, env, cfg, ssh, gcloud, o
     const made = makePullerKey({ gcloud, cfg, tmpDir, out });
     try {
       const script = installPullerKeyScript({ registryHost: `${cfg.region}-docker.pkg.dev` });
-      const res = await ssh.exec(conn, `bash -c ${shq(script)}`, { input: fs.readFileSync(made.keyFile) });
+      const res = await ssh.exec(conn, remoteBash(script), { input: fs.readFileSync(made.keyFile) });
       if (res.code === 255) throw sshError(res, conn);
       if (!res.stdout.includes('login=ok')) throw new DockeriserError(`docker login on ${flags.host} failed: ${res.stderr.trim().split('\n').pop() || 'no detail'}`);
       out.info(`    key saved on the server as /etc/dockeriser/puller.json (600, root); docker is signed in`);
