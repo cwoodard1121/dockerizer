@@ -134,7 +134,7 @@ export function mapGoogleError(err, ctx = {}) {
     return new AuthError(
       `Google did not accept the credentials${action}. Either no credentials were found, the key file is wrong or revoked, or your gcloud login has expired.`,
       {
-        fix: 'Run `dockeriser doctor` to see which credentials are in use. Set GOOGLE_APPLICATION_CREDENTIALS to the service account key file, or run `gcloud auth application-default login --impersonate-service-account=<sa email>`.',
+        fix: 'Re-run the setup script (powershell -ExecutionPolicy Bypass -File setup\\setup.ps1 from the dockeriser folder); it signs you in again. `dockeriser doctor` shows which credentials are in use.',
         cause: err,
       },
     );

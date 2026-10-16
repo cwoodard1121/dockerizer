@@ -86,7 +86,7 @@ export function resolveConfig({ flags = {}, env = process.env, homeDir = os.home
   if (!out.project) {
     if (requireProject) {
       throw new ConfigError('No Google Cloud project is set, so dockeriser does not know where to build or what to check.', {
-        fix: `Pass --project <id>, set DOCKERISER_PROJECT, or run setup/setup.ps1 (it writes ${configFile}).`,
+        fix: `Run the setup script from the dockeriser folder (it asks which project to use and writes ${configFile}): powershell -ExecutionPolicy Bypass -File setup\\setup.ps1   Or pass --project <id>.`,
       });
     }
     return out;

@@ -4,13 +4,15 @@
 
 import { applyCredentials, resolveConfig, resolveCredentials, resourceNames } from './config.js';
 import { EXIT, mapGoogleError } from './errors.js';
+import { SETUP_SCRIPT } from './status.js';
 
 /** HTTP-ish status of an error from either gRPC, Cloud Storage or gaxios. */
 function statusOf(err) {
   return err?.response?.status ?? err?.status ?? err?.code;
 }
 
-const SETUP_FIX = (project) => `Run setup/setup.ps1 -Project ${project || '<project-id>'} (safe to re-run).`;
+const SETUP_FIX = (project) =>
+  `Run the setup script (safe to re-run): powershell -ExecutionPolicy Bypass -File "${SETUP_SCRIPT}"${project ? ` -Project ${project}` : ''}`;
 
 /**
  * Run all checks. Network checks are skipped (not failed) when config or credentials are missing.
@@ -38,7 +40,7 @@ export async function runDoctor({ flags = {}, env = process.env, homeDir, create
     if (cfg.project) {
       add('Config', 'pass', `project ${cfg.project} (${cfg.sources.project}), region ${cfg.region}, repo ${cfg.repo}, service account ${cfg.serviceAccount}`);
     } else {
-      fail(EXIT.CONFIG, 'Config', 'No project set.', `Pass --project <id>, set DOCKERISER_PROJECT, or run setup/setup.ps1 (writes ${cfg.configFile}).`);
+      fail(EXIT.CONFIG, 'Config', 'No project set.', `${SETUP_FIX()} (it asks which project to use), or pass --project <id>.`);
     }
   } catch (err) {
     fail(EXIT.CONFIG, 'Config', err.message, err.fix);
@@ -52,13 +54,13 @@ export async function runDoctor({ flags = {}, env = process.env, homeDir, create
     applyCredentials(creds, env);
     if (creds.source === 'none') {
       fail(EXIT.AUTH, 'Credentials', 'No Google credentials found (no GOOGLE_APPLICATION_CREDENTIALS, no ~/.dockeriser/key.json, no gcloud application-default login).',
-        `Either run setup/setup.ps1 -CreateKey (key file), or run \`gcloud auth application-default login --impersonate-service-account=${cfg?.serviceAccount || '<service account email>'}\`. See docs/SETUP.md.`);
+        `The setup script signs you in. ${SETUP_FIX(cfg?.project)}`);
     } else {
       const label = { env: 'GOOGLE_APPLICATION_CREDENTIALS', 'dockeriser-key': 'dockeriser key file', 'gcloud-adc': 'gcloud application-default login' }[creds.source];
       add('Credentials', 'pass', `${label} at ${creds.path} (type: ${creds.type})`);
       if (creds.type === 'authorized_user') {
         add('Identity', 'warn', 'These are your personal gcloud credentials, not the dockeriser service account.',
-          'Recommended: `gcloud auth application-default login --impersonate-service-account=<service account email>` so builds use only the dockeriser permissions.');
+          `Re-running the setup script switches the sign-in to the dockeriser account. ${SETUP_FIX(cfg?.project)}`);
       }
     }
   } catch (err) {

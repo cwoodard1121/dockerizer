@@ -1,7 +1,29 @@
 # Setting up dockeriser
 
 This gets your Google Cloud account ready so `dockeriser build` can build Docker images on Google's
-machines instead of yours. You do it once. It takes about 15 minutes.
+machines instead of yours. You do it once. It takes about 5 minutes.
+
+## The short version
+
+1. Install Google's command-line tool, then open a new terminal:
+   ```
+   winget install Google.CloudSDK
+   ```
+2. From the dockeriser folder, run the setup script. It asks which project to use (or pass `-Project my-id`):
+   ```
+   powershell -ExecutionPolicy Bypass -File setup\setup.ps1
+   ```
+   Full-path form, from anywhere:
+   ```
+   powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"
+   ```
+3. Try a build:
+   ```
+   node bin\dockeriser.js build examples\hello --image hello
+   ```
+
+From Claude Code, type the step 2 command in the prompt with a leading `!` and add `-Project <your-id>`,
+since the script can't ask questions there.
 
 ## What you are setting up, in plain words
 
@@ -11,69 +33,43 @@ machines instead of yours. You do it once. It takes about 15 minutes.
   build logs (deleted after 30 days). Both private.
 - An **image shelf** ("Artifact Registry repo") called `docker-images`, where finished images go. It keeps
   the 10 newest versions of each image and clears out older ones, so you stay inside the free storage.
+- A **budget alert** that emails you at 50%, 90% and 100% of $5 a month (change it with `-Budget 10`,
+  turn it off with `-Budget 0`).
 
-## Step 1. Install the Google Cloud tool
+## What the script does, step by step
 
-```
-winget install Google.CloudSDK
-```
+Each step prints one line: ✔ done, "skipped" (already done) or ✖ (problem, with what to do). Running it
+again is safe; it only does what is missing.
 
-Close and reopen your terminal so the `gcloud` command is found.
+1. **Checks for gcloud.** If it's missing, it prints the `winget` command and stops.
+2. **Signs you in to Google** (`gcloud auth login`, in the browser) if you aren't already.
+3. **Picks the project.** With `-Project` it uses that. Without, it offers the project you used last time,
+   or lists your projects with a "Create a new project" choice. For a new one it opens the Google Cloud
+   "create project" page and asks for the ID; type a new ID and it creates the project for you.
+   The choice is saved in `%USERPROFILE%\.dockeriser\config.json`.
+4. **Links billing.** Billing has to be linked even for the free tier (Google won't run builds without
+   it; you only pay past the free amounts). One billing account: linked automatically. Several: it lists
+   them and tells you to re-run with `-BillingAccount <id>`. None: it prints the link to create one.
+5. **Turns on the Google services** it needs, creates the robot account, the image shelf (with cleanup)
+   and the two buckets (with auto-delete), and gives the robot account its permissions.
+6. **Sets the budget alert.** If your account isn't allowed to (it needs Billing Account Administrator),
+   it warns and carries on.
+7. **Lets dockeriser sign in as the robot account** (a second, one-time browser sign-in:
+   `gcloud auth application-default login --impersonate-service-account=...`). No key file to lose.
+8. **Checks everything** by running `dockeriser login`, after installing the Node packages if needed.
 
-## Step 2. Sign in
+Options: `-Project <id>`, `-Region <region>` (default `northamerica-northeast2`, Toronto),
+`-BillingAccount <id>`, `-Budget <dollars>` (default 5, 0 = none), `-CreateKey` (see below).
+Git Bash, macOS or Linux: `setup/setup.sh` takes the same options.
 
-```
-gcloud auth login
-```
+## Advanced: key file instead of browser sign-in
 
-A browser window opens. Pick your Google account. (From Claude Code, type `! gcloud auth login` in the
-prompt. An AI agent can't do this browser step for you.)
-
-## Step 3. Pick or create a project, and turn on billing
-
-1. Create a project at https://console.cloud.google.com/projectcreate (or use an existing one). Note the
-   **project ID** (lowercase, like `cameron-builds-123`). It is not the display name.
-2. Link a billing account at https://console.cloud.google.com/billing/linkedaccount?project=YOUR-PROJECT-ID
-
-**Billing has to be linked even if you only use the free tier.** Google won't run builds without it. You
-are only charged if you go past the free amounts (see Costs below).
-
-## Step 4. Run the setup script
-
-From the dockeriser folder:
-
-```
-powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Project YOUR-PROJECT-ID
-```
-
-Options: `-Region us-central1` (default `northamerica-northeast2`, Toronto), `-CreateKey` (save a key
-file, see Step 5). Safe to run again; it skips anything already done. Git Bash/macOS/Linux:
-`setup/setup.sh -Project YOUR-PROJECT-ID`.
-
-## Step 5. Choose how dockeriser signs in
-
-**Option A, recommended if you have gcloud installed: sign in as the robot account.** No key file to lose.
-
-```
-gcloud auth application-default login --impersonate-service-account=dockeriser@YOUR-PROJECT-ID.iam.gserviceaccount.com
-```
-
-A browser opens once. After that, dockeriser uses your login to borrow the robot account's permissions.
-
-**Option B, for a headless box with no browser (e.g. an agent machine): a key file.**
-Re-run setup with `-CreateKey`. It saves `%USERPROFILE%\.dockeriser\key.json`, which dockeriser finds
-automatically (or set `GOOGLE_APPLICATION_CREDENTIALS` to its path). Treat this file like a password:
-anyone who has it can build and push as the robot account. It lives outside the code folder on purpose,
-and `.gitignore` blocks `key.json` in case it gets copied in. If your organisation blocks key creation
-(policy `iam.disableServiceAccountKeyCreation`), use Option A.
-
-## Step 6. Check
-
-```
-node bin\dockeriser.js login     # tells you the next step, if any
-node bin\dockeriser.js doctor    # checks every piece, with the fix for anything wrong
-node bin\dockeriser.js build examples\hello --image hello
-```
+For a headless machine with no browser (e.g. a dedicated agent box), add `-CreateKey`. The script saves
+`%USERPROFILE%\.dockeriser\key.json`, which dockeriser finds automatically (or set
+`GOOGLE_APPLICATION_CREDENTIALS` to its path), and skips the second browser sign-in. Treat this file like
+a password: anyone who has it can build and push as the robot account. It lives outside the code folder on
+purpose, and `.gitignore` blocks `key.json` in case it gets copied in. Some organisations block key
+creation (policy `iam.disableServiceAccountKeyCreation`); then use the normal browser sign-in.
 
 ## Doing it by clicking instead (no script)
 
@@ -95,7 +91,7 @@ Replace `P` with your project ID and `R` with your region (`northamerica-northea
    *Storage Admin*.
 6. **Let it run builds as itself**: Service Accounts > dockeriser > Permissions > Grant access: the robot
    account itself with *Service Account User*. Also add yourself with *Service Account Token Creator*
-   (needed for Option A sign-in).
+   (needed for the browser sign-in as the robot account).
 7. **Config file**: create `%USERPROFILE%\.dockeriser\config.json`:
    ```json
    { "project": "P", "region": "R", "repo": "docker-images", "serviceAccount": "dockeriser@P.iam.gserviceaccount.com" }
@@ -114,7 +110,7 @@ Those two are the core, but on their own a build fails. The extras, each limited
 | Service Account User on the robot account itself | Telling Cloud Build "run as this account" requires permission to use that account. Since the robot both starts and runs the build, it needs this on itself. |
 | Service Usage Consumer (project) | Lets the account make API calls billed to this project. gcloud sign-ins add a "bill this project" note to each call, which needs this. |
 | Logs Writer (project) | Lets builds write to Cloud Logging. Not used today (logs go to the bucket), but switching costs no new setup. |
-| Service Account Token Creator for **you** on the robot account | Lets you sign in as the robot account (Option A) instead of using a key file. |
+| Service Account Token Creator for **you** on the robot account | Lets dockeriser use your Google sign-in to act as the robot account, instead of a key file. |
 
 ## Costs
 
@@ -133,22 +129,22 @@ Those two are the core, but on their own a build fails. The extras, each limited
 `dockeriser usage` shows minutes used, the month-end projection, and estimated cost. It is an estimate;
 the real bill is at https://console.cloud.google.com/billing.
 
-**Set a budget alert** (emails you before surprises): Billing > Budgets & alerts > Create budget. Pick the
-billing account, set an amount like $5, keep the 50/90/100% alerts. Note: a budget warns you, it does
-not stop spending.
+**Budget alert:** the setup script creates one called `dockeriser` ($5 a month, emails at 50/90/100%;
+change with `-Budget`). To make or edit one by hand: Billing > Budgets & alerts > Create budget. A budget
+warns you; it does not stop spending.
 
 ## Troubleshooting
 
 | Error message (from dockeriser) | Cause | Fix |
 |---|---|---|
-| No Google Cloud project is set | No config yet | Run setup (Step 4), or pass `--project` |
-| No Google credentials found | Step 5 not done | Do Step 5 (Option A or B) |
+| No Google Cloud project is set | Setup not run yet | Run the setup script |
+| No Google credentials found | Sign-in not finished | Run the setup script again |
 | GOOGLE_APPLICATION_CREDENTIALS points at … but that file does not exist | Wrong path in the variable | Fix the path or remove the variable |
 | The cloudbuild.googleapis.com API is turned off | API not enabled | Click the link in the message, or re-run setup; wait a minute |
-| Project … has no active billing account | Billing not linked | Step 3, part 2 |
+| Project … has no active billing account | Billing not linked | Run the setup script (it links billing) |
 | Permission denied … (cloudbuild.builds.create) | Cloud Build Editor missing | Re-run setup |
 | Permission denied … (iam.serviceAccounts.actAs) | Service Account User missing on the robot account | Re-run setup |
-| Permission denied … (iam.serviceAccounts.getAccessToken) | Option A sign-in without Token Creator | Re-run setup while signed in as yourself |
+| Permission denied … (iam.serviceAccounts.getAccessToken) | Your account can't act as the robot account yet | Re-run setup while signed in as yourself |
 | Permission denied … (serviceusage.services.use) | Service Usage Consumer missing | Re-run setup |
 | The source bucket gs://…-dockeriser-src does not exist | Setup not run for this project | Re-run setup |
 | … is not allowed to upload to gs://…-dockeriser-src | Storage Object Admin missing on that bucket | Re-run setup |
@@ -158,5 +154,7 @@ not stop spending.
 | BUILD FAILURE, reason FETCH_SOURCE_FAILED | Build can't read the upload | Re-run setup; if it persists, grant Storage Admin on the source bucket |
 | BUILD FAILURE, reason USER_BUILD_STEP | Your Dockerfile or code failed | Read the last log lines printed (full log path is shown) |
 | BUILD TIMEOUT | Build took longer than `--timeout` (default 20m) | Pass `--timeout 45m` |
-| Google did not accept the credentials | Expired login or revoked key | Re-run the Step 5 command |
-| gcloud: Key creation is not allowed on this service account | Organisation policy blocks keys | Use Option A |
+| Google did not accept the credentials | Expired login or revoked key | Run the setup script again |
+| gcloud: Key creation is not allowed on this service account | Organisation policy blocks keys | Run setup without `-CreateKey` |
+| ✖ could not create the budget alert | Your account isn't a billing admin | Set one by hand: Billing > Budgets & alerts |
+| You have more than one billing account | Script can't guess which | Re-run with the `-BillingAccount` it printed |

@@ -109,3 +109,8 @@ tokens), `logging`, `serviceusage`.
 - That Storage Admin on the logs bucket and Object Admin on the source bucket are enough for this
   account in practice, with no extra project-level storage grant.
 - `serviceusage.services.use` being required in practice for key-file auth (granted either way).
+- Setup script parts that need a real gcloud session: the `gcloud billing accounts list` output format
+  (`name` with or without the `billingAccounts/` prefix; both handled), `gcloud billing budgets create`
+  with `--budget-amount` given without a currency (meant to use the billing account's own currency) and
+  `--billing-project` as the quota project, and the ADC impersonation check reading
+  `service_account_impersonation_url` from `%APPDATA%\gcloud\application_default_credentials.json`.

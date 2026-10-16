@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dockeriser setup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow column of numbered steps, each with a copyable command */
+:root {
+  --bg: #f5f7f8; --surface: #ffffff; --fg: #1b2328; --muted: #5d6b73;
+  --line: #d9e0e4; --accent: #1a73a8; --code-bg: #eef2f4; --ok: #2e7d4f;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12171a; --surface: #192024; --fg: #e3e9ec; --muted: #94a3ab;
+  --line: #2a343a; --accent: #5fb3e4; --code-bg: #0e1316; --ok: #6cc795; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12171a; --surface: #192024; --fg: #e3e9ec; --muted: #94a3ab;
+  --line: #2a343a; --accent: #5fb3e4; --code-bg: #0e1316; --ok: #6cc795; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--sans); margin: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 40px 64px; }
+main { max-width: 680px; margin: 0 auto; display: grid; gap: 28px; }
+h1 { font-size: 1.75rem; margin: 0; text-wrap: balance; }
+.lede { color: var(--muted); margin: 6px 0 0; }
+ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; counter-reset: s; }
+li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px 18px 16px 56px; position: relative; min-width: 0; }
+li::before { content: counter(s); position: absolute; left: 16px; top: 15px; width: 26px; height: 26px;
+  border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 600; font-size: .85rem;
+  display: grid; place-items: center; }
+h2 { font-size: 1.05rem; margin: 0 0 4px; }
+p { margin: 0 0 8px; }
+.note { color: var(--muted); font-size: .9rem; margin: 8px 0 0; }
+.cmd { display: flex; gap: 8px; align-items: stretch; margin-top: 8px; }
+code.block { flex: 1; min-width: 0; overflow-x: auto; white-space: pre; background: var(--code-bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; font: 14px/1.4 var(--mono); }
+code { font-family: var(--mono); font-size: .92em; }
+button { font: 600 .8rem var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--line);
+  border-radius: 6px; padding: 0 12px; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.done { color: var(--ok); }
+a { color: var(--accent); }
+.done-box { border-left: 3px solid var(--ok); padding: 4px 0 4px 14px; color: var(--muted); }
+.done-box strong { color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>dockeriser setup</h1>
+    <p class="lede">About 5 minutes, once. After this, Docker builds run on Google instead of your PC.</p>
+  </header>
+
+  <ol>
+    <li>
+      <h2>Install Google's command-line tool</h2>
+      <div class="cmd"><code class="block">winget install Google.CloudSDK</code><button type="button">Copy</button></div>
+      <p class="note">Then open a new terminal so it's found.</p>
+    </li>
+    <li>
+      <h2>Run the setup script</h2>
+      <p>From the dockeriser folder. It asks which project to use (or pass <code>-Project my-id</code>), and opens your browser to sign in to Google.</p>
+      <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File setup\setup.ps1</code><button type="button">Copy</button></div>
+      <p class="note">Or from anywhere:</p>
+      <div class="cmd"><code class="block">powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"</code><button type="button">Copy</button></div>
+      <p class="note">It sets up the project, billing, a $5 budget alert and everything else, then checks it all. Safe to run again. In Claude Code, type it with a leading <code>!</code> and add <code>-Project my-id</code>.</p>
+    </li>
+    <li>
+      <h2>Try a build</h2>
+      <div class="cmd"><code class="block">node bin\dockeriser.js build examples\hello --image hello</code><button type="button">Copy</button></div>
+      <p class="note">You should see the build log stream in, then the image name and a line like <code>Cloud Build: 1 / 2,500 free min this month</code>.</p>
+    </li>
+  </ol>
+
+  <p class="done-box"><strong>Check usage any time</strong> with <code>node bin\dockeriser.js usage</code>, or <code>/dockeriser:usage</code> in Claude Code. If something fails, run the setup script again; it tells you what's missing.</p>
+</main>
+
+<script>
+document.querySelectorAll('.cmd button').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var code = btn.previousElementSibling;
+    var done = function () { btn.textContent = 'Copied'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1500); };
+    navigator.clipboard.writeText(code.textContent).then(done, function () {
+      var r = document.createRange(); r.selectNodeContents(code);
+      var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    });
+  });
+});
+</script>
+</body>
+</html>

@@ -17,10 +17,17 @@ The CLI path is in the session-start note ("node \"<path>\" build ..."). If ther
 node CLI status --offline --json
 ```
 
-If `ready` is `false`, do NOT fall back to local docker. Show Cameron the `nextSteps` from that output
-(or run `node CLI login` and relay what it prints). Browser sign-ins can't be done by an agent; he types
-`! gcloud auth login` (and the other `gcloud ... login` commands) in the Claude prompt himself.
-Then stop and wait for him.
+If `ready` is `false`, do NOT fall back to local docker. Setup is one command, which he runs himself
+because it opens the browser for Google sign-in. Tell Cameron to type, in the Claude prompt:
+
+```
+! powershell -ExecutionPolicy Bypass -File "<repo>\setup\setup.ps1" -Project <id>
+```
+
+`<repo>` is the folder above `bin` in the CLI path. Use the project ID from the status output (`project`)
+if there is one; otherwise ask him for his project ID (or tell him to run the command without `-Project`
+in his own terminal, where it asks). If `gcloud` is not installed (`gcloud.installed: false`), the first
+step is `winget install Google.CloudSDK` and a new terminal. Then stop and wait for him.
 
 ## 2. Build
 

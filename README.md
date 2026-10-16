@@ -1,24 +1,51 @@
 # dockeriser
 
-Build Docker images on **Google Cloud Build** instead of with local `docker build`. It packages a folder,
-uploads it, starts the build, streams the log to your terminal, and pushes the image to **Artifact
-Registry**. Builds run on Google's default machine, which is covered by the free tier
-(2,500 build-minutes a month).
+Build Docker images on **Google Cloud Build** instead of on your own PC. It uploads a folder, runs the
+build on Google's machines, shows the build output live, and stores the finished image in your Google
+Cloud account. Normal use fits in Google's free 2,500 build-minutes a month.
 
-Node 22+, no build step. Windows-first (PowerShell setup script), works anywhere Node runs.
+## Setup (about 5 minutes)
 
-## Quick start
+1. Install Google's command-line tool, then open a new terminal:
+   ```
+   winget install Google.CloudSDK
+   ```
+2. From this folder, run the setup script. It asks which project to use (or pass `-Project my-id`):
+   ```
+   powershell -ExecutionPolicy Bypass -File setup\setup.ps1
+   ```
+   Or from anywhere:
+   ```
+   powershell -ExecutionPolicy Bypass -File "C:\Users\camer\Desktop\Projects\dockeriser\setup\setup.ps1"
+   ```
+3. Try a build:
+   ```
+   node bin\dockeriser.js build examples\hello --image hello
+   ```
+
+The same steps with copy buttons: [docs/setup.html](docs/setup.html).
+
+### What the script does
+
+- Signs you in to Google in your browser (only if you aren't already).
+- Uses the project you pick, or creates a new one, and links your billing account (needed even for the free tier).
+- Turns on the Google services dockeriser needs and makes a private place for images and build files, with old files cleaned up automatically.
+- Creates a `dockeriser` account with only the permissions builds need.
+- Sets a $5/month budget alert so you get an email before any surprise (`-Budget 10` to change).
+- Lets dockeriser sign in as that account (one more browser sign-in, no password files).
+- Checks everything at the end. Safe to run again any time; it only fixes what's missing.
+
+More detail, the click-through version, key files for headless machines, and the full permissions list:
+[docs/SETUP.md](docs/SETUP.md).
+
+### Check usage
 
 ```
-npm install
-powershell -ExecutionPolicy Bypass -File setup\setup.ps1 -Project YOUR-PROJECT-ID   # once; see docs/SETUP.md
-gcloud auth application-default login --impersonate-service-account=dockeriser@YOUR-PROJECT-ID.iam.gserviceaccount.com
-node bin/dockeriser.js login
-node bin/dockeriser.js build examples/hello --image hello
+node bin\dockeriser.js usage
 ```
 
-Full setup guide, costs and troubleshooting: [docs/SETUP.md](docs/SETUP.md). Source notes for every
-cloud fact the code relies on: [docs/RESEARCH.md](docs/RESEARCH.md).
+Or in Claude Code: `/dockeriser:usage`. Shows how many of the 2,500 free minutes you've used this month,
+where you're heading by month end, and any estimated cost.
 
 ## Commands
 
@@ -132,6 +159,9 @@ works the same in every Claude config folder, because each folder's cache path l
 marketplace clone.
 
 ## Development
+
+Node 22+, no build step. Sources for every Google Cloud fact the code relies on (prices, free tier,
+permissions): [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ```
 npm test        # node:test, all Google clients mocked

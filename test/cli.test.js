@@ -198,7 +198,21 @@ test('session-start hook: not-signed-in context when unconfigured', async () => 
   const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env: { APPDATA: tempTree({}), PATH: '' }, homeDir: tempTree({}) });
   assert.match(text, /^dockeriser \(Docker builds on Google Cloud Build\) is not signed in\. Don't run local `docker build`\. Tell Cameron to run:/);
   assert.match(text, /winget install Google\.CloudSDK/);
-  assert.match(text, /setup\.ps1" -Project <your-project-id>/);
+  assert.match(text, /powershell -ExecutionPolicy Bypass -File ".*setup\.ps1"\n/);
+  assert.match(text, /add -Project <your-project-id>/);
+  assert.doesNotMatch(text, /gcloud auth/, 'the setup script does the sign-ins itself');
+});
+
+test('session-start hook and login: the real project ID goes into the setup command when known', async () => {
+  const home = tempTree({ '.dockeriser/config.json': '{"project":"cam-builds-1"}' });
+  const env = { APPDATA: tempTree({}), PATH: '' };
+  const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env, homeDir: home });
+  assert.match(text, /setup\.ps1" -Project cam-builds-1/);
+  assert.doesNotMatch(text, /<your-project-id>/);
+
+  const d = deps({ env, homeDir: home, createClients: async () => assert.fail('no network') });
+  assert.equal(await run(['login'], d), 3);
+  assert.match(d.stdout.text(), /setup\.ps1" -Project cam-builds-1/);
 });
 
 test('session-start hook: one line with the usage when configured', async () => {

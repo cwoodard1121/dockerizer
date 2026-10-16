@@ -14,7 +14,6 @@ import { readUsageCache, summaryFromCache } from './usage.js';
 export const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const CLI_PATH = path.join(REPO_ROOT, 'bin', 'dockeriser.js');
 export const SETUP_SCRIPT = path.join(REPO_ROOT, 'setup', 'setup.ps1');
-export const SETUP_GUIDE = path.join(REPO_ROOT, 'docs', 'SETUP.md');
 
 /**
  * Find the gcloud executable without running it (PATH scan plus the default install folders).
@@ -77,50 +76,40 @@ export function getOfflineStatus({ env = process.env, homeDir = os.homedir(), no
 }
 
 /**
- * The sign-in steps still needed, in order, with copy-paste commands.
+ * The one setup command, with the real project ID when config already has one.
  * @param {ReturnType<typeof getOfflineStatus>} status
- * @param {{gcloudLoggedIn?: boolean}} [opts] Unknown (undefined) when gcloud was not asked.
+ * @returns {string}
+ */
+export function setupCommand(status) {
+  const project = status.project ? ` -Project ${status.project}` : '';
+  return `powershell -ExecutionPolicy Bypass -File "${status.setupScript}"${project}`;
+}
+
+/**
+ * The steps still needed, in order, with copy-paste commands. The setup script does the Google
+ * sign-in, project, billing and credentials itself, so it is nearly always the only step.
+ * @param {ReturnType<typeof getOfflineStatus>} status
  * @returns {Array<{title: string, commands: string[], note?: string}>}
  */
-export function nextSteps(status, { gcloudLoggedIn } = {}) {
+export function nextSteps(status) {
   if (status.ready) return [];
   const steps = [];
-  const needsGcloud = !status.configured || !status.credentials.present;
-  if (needsGcloud && !status.gcloud.installed) {
-    steps.push({
-      title: 'Install the Google Cloud CLI (then open a new terminal so it is on PATH)',
-      commands: ['winget install Google.CloudSDK'],
-    });
-  }
-  if (needsGcloud && gcloudLoggedIn !== true) {
-    steps.push({
-      title: gcloudLoggedIn === false ? 'Sign in to Google (a browser window opens)' : 'Sign in to Google if you have not already (a browser window opens)',
-      commands: ['gcloud auth login'],
-      note: 'From Claude Code, type it in the prompt as: ! gcloud auth login  (an AI agent cannot do the browser sign-in for you).',
-    });
+  if (!status.gcloud.installed) {
+    steps.push({ title: 'Install the Google Cloud tool, then open a new terminal', commands: ['winget install Google.CloudSDK'] });
   }
   if (status.configError) {
-    steps.push({ title: `Fix the config file: ${status.configError}`, commands: [`notepad "${status.configFile || '%USERPROFILE%\\.dockeriser\\config.json'}"`] });
-  } else if (!status.configured) {
-    steps.push({
-      title: `Set up the Google Cloud project (needs a project with billing linked; guide: ${SETUP_GUIDE})`,
-      commands: [`powershell -ExecutionPolicy Bypass -File "${status.setupScript}" -Project <your-project-id>`],
-      note: 'Replace <your-project-id> with your project ID. The script is safe to re-run.',
-    });
+    steps.push({ title: `Fix or delete the settings file: ${status.configError}`, commands: [`notepad "${status.configFile}"`] });
   }
-  if (!status.credentials.present || !status.configured) {
-    if (status.credentials.error) {
-      steps.push({ title: status.credentials.error, commands: [], note: 'Fix the path, or remove the GOOGLE_APPLICATION_CREDENTIALS variable to use gcloud credentials instead.' });
-    } else if (!status.credentials.present) {
-      const sa = status.serviceAccount || 'dockeriser@<your-project-id>.iam.gserviceaccount.com';
-      steps.push({
-        title: 'Let dockeriser act as its service account (a browser window opens)',
-        commands: [`gcloud auth application-default login --impersonate-service-account=${sa}`],
-        note: 'No-browser alternative for a headless box: re-run setup with -CreateKey to save a key file at %USERPROFILE%\\.dockeriser\\key.json.',
-      });
-    }
+  if (status.credentials.error) {
+    steps.push({ title: status.credentials.error, commands: [], note: 'Fix the path, or remove the GOOGLE_APPLICATION_CREDENTIALS variable so the setup script can sign you in instead.' });
   }
-  steps.push({ title: 'Check that everything works', commands: [`node "${status.cliPath}" login`] });
+  steps.push({
+    title: 'Run the setup script (it signs you in to Google in the browser, sets up the project and billing, and checks everything; safe to re-run)',
+    commands: [setupCommand(status)],
+    note: status.project
+      ? 'From Claude Code, type it in the prompt with a leading "!".'
+      : 'In a normal terminal it asks which project to use. From Claude Code, type it with a leading "!" and add -Project <your-project-id> (it cannot ask questions there).',
+  });
   return steps;
 }
 

@@ -16,7 +16,7 @@ import { LogTailer, sleep as realSleep } from './logs.js';
 import { createOutput, formatBytes, formatDuration } from './output.js';
 import { printDoctor, runDoctor } from './doctor.js';
 import { runLogin } from './login.js';
-import { formatSteps, getOfflineStatus, nextSteps } from './status.js';
+import { SETUP_SCRIPT, formatSteps, getOfflineStatus, nextSteps } from './status.js';
 import {
   arStorageSummary, cacheFromTotals, fetchBuildTotals, fetchRepoSize, formatUsageReport, monthRange,
   projectUsage, readUsageCache, recordBuild, summaryFromCache, usageLine, writeUsageCache,
@@ -314,7 +314,7 @@ function requireCredentials(env, homeDir, cfg) {
   const creds = resolveCredentials({ env, homeDir });
   if (creds.source === 'none' && !env.METADATA_SERVER_DETECTION) {
     throw new AuthError('No Google credentials found.', {
-      fix: `Run \`dockeriser login\` for the next step: usually \`gcloud auth application-default login --impersonate-service-account=${cfg.serviceAccount}\`, or a key file from setup/setup.ps1 -CreateKey.`,
+      fix: `Run the setup script; it signs you in: powershell -ExecutionPolicy Bypass -File "${SETUP_SCRIPT}" -Project ${cfg.project}`,
     });
   }
   applyCredentials(creds, env);
