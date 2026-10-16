@@ -5,9 +5,9 @@
  *
  * Finding the CLI: marketplace installs copy only plugin/ into
  * <config>/plugins/cache/<marketplace>/dockeriser/<version>/, so the plugin's parent is not a
- * checkout. We try, in order: the plugin's parent folder (directory marketplace / running from
- * the repo), the owner's working copy, then the full git clone Claude Code keeps at
- * <config>/plugins/marketplaces/dockerizer/.
+ * checkout. We try, in order: $DOCKERISER_HOME (any checkout you point it at), the plugin's parent
+ * folder (directory marketplace / running from the repo), then the full git clone Claude Code keeps
+ * at <config>/plugins/marketplaces/dockerizer/. Nothing user-specific is hardcoded.
  */
 
 import fs from 'node:fs';
@@ -15,17 +15,18 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const REPO_URL = 'https://github.com/cwoodard1121/dockerizer';
-export const OWNER_CHECKOUT = 'C:/Users/camer/Desktop/Projects/dockeriser';
+export const MARKETPLACE = 'cwoodard1121/dockerizer';
 
 /**
  * Candidate checkout folders, best first.
  * @param {string} pluginRoot
+ * @param {Record<string, string|undefined>} [env]
  * @returns {string[]}
  */
-export function candidateRoots(pluginRoot) {
+export function candidateRoots(pluginRoot, env = process.env) {
   return [
+    ...(env.DOCKERISER_HOME ? [path.resolve(env.DOCKERISER_HOME)] : []),
     path.resolve(pluginRoot, '..'),
-    OWNER_CHECKOUT,
     // <config>/plugins/cache/<marketplace>/<plugin>/<version> -> <config>/plugins/marketplaces/dockerizer
     path.resolve(pluginRoot, '..', '..', '..', '..', 'marketplaces', 'dockerizer'),
   ];
@@ -52,27 +53,26 @@ export function pickRoot(roots) {
  * @returns {Promise<string>}
  */
 export async function buildContext({ pluginRoot, env = process.env, homeDir }) {
-  const picked = pickRoot(candidateRoots(pluginRoot));
+  const picked = pickRoot(candidateRoots(pluginRoot, env));
   if (!picked) {
     return [
-      'dockeriser (Docker builds on Google Cloud Build) is installed as a plugin, but its CLI is not on this machine.',
-      "Don't run local `docker build`. Tell Cameron to run:",
-      `  git clone ${REPO_URL} "${OWNER_CHECKOUT}"`,
-      `  cd "${OWNER_CHECKOUT}" && npm install`,
+      'dockeriser (Docker builds on Google Cloud Build) is installed as a plugin, but its CLI was not found.',
+      `Don't run local \`docker build\`. Tell the user to add the marketplace in Claude Code (/plugin marketplace add ${MARKETPLACE}),`,
+      `or to clone ${REPO_URL} anywhere and set DOCKERISER_HOME to that folder.`,
     ].join('\n');
   }
   const status = await import(pathToFileURL(path.join(picked.root, 'src', 'status.js')).href);
   const s = status.getOfflineStatus({ env, ...(homeDir ? { homeDir } : {}) });
   const cli = path.join(picked.root, 'bin', 'dockeriser.js').replace(/\\/g, '/');
-  const install = picked.installed ? '' : `\nFirst run once: cd "${picked.root}" && npm install`;
+  const install = picked.installed ? '' : `\nFirst run once: cd "${picked.root}" && npm install --omit=dev (the /dockeriser:* commands do this themselves)`;
   if (!s.ready) {
     return [
-      "dockeriser (Docker builds on Google Cloud Build) is not signed in. Don't run local `docker build`. Tell Cameron to run:",
+      "dockeriser (Docker builds on Google Cloud Build) is not signed in. Don't run local `docker build`. Tell the user to run (or use /dockeriser:setup):",
       status.formatSteps(status.nextSteps(s)),
     ].join('\n') + install;
   }
   const usage = s.usage?.line ? ` ${s.usage.line}` : '';
-  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json).${usage}${install}`;
+  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json, or /dockeriser:build). Deploy only when the user asks.${usage}${install}`;
 }
 
 async function main() {

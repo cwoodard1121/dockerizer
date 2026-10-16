@@ -189,7 +189,7 @@ test('usage with no credentials gives a readable error and non-zero exit', async
 
 test('session-start hook: not-signed-in context when unconfigured', async () => {
   const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env: { APPDATA: tempTree({}), PATH: '' }, homeDir: tempTree({}) });
-  assert.match(text, /^dockeriser \(Docker builds on Google Cloud Build\) is not signed in\. Don't run local `docker build`\. Tell Cameron to run:/);
+  assert.match(text, /^dockeriser \(Docker builds on Google Cloud Build\) is not signed in\. Don't run local `docker build`\. Tell the user to run \(or use \/dockeriser:setup\):/);
   assert.match(text, /winget install Google\.CloudSDK/);
   assert.match(text, /powershell -ExecutionPolicy Bypass -File ".*setup\.ps1"\n/);
   assert.match(text, /add -Project <your-project-id>/);
@@ -215,7 +215,7 @@ test('session-start hook: one line with the usage when configured', async () => 
     JSON.stringify({ version: 1, month: new Date().toISOString().slice(0, 7), project: 'demo-proj', region: 'northamerica-northeast2', seconds: 600, otherSeconds: 0, builds: 1, countedIds: [], partial: false }),
   );
   const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env, homeDir: home });
-  assert.match(text, /^Docker builds: use dockeriser, not local docker build \(node ".*bin\/dockeriser\.js" build <dir> --image <name> --json\)\. Cloud Build: 10 \/ 2,500 free min this month \(0%\)$/);
+  assert.match(text, /^Docker builds: use dockeriser, not local docker build \(node ".*bin\/dockeriser\.js" build <dir> --image <name> --json, or \/dockeriser:build\)\. Deploy only when the user asks\. Cloud Build: 10 \/ 2,500 free min this month \(0%\)$/);
   assert.equal(text.includes('\n'), false);
 });
 
@@ -225,7 +225,7 @@ test('unknown commands and flags exit 2', async () => {
   assert.equal(await run(['build', '--bogus'], deps({})), 2);
   const h = deps({});
   assert.equal(await run(['--help'], h), 0);
-  assert.match(h.stdout.text(), /dockeriser build <dir> --image/);
+  assert.match(h.stdout.text(), /dockeriser build \[dir\] --image/);
 });
 
 test('first Ctrl-C cancels the build and exits 130; JSON still printed', async () => {

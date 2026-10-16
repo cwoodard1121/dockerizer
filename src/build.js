@@ -128,6 +128,50 @@ export function buildRequest({ project, region, serviceAccount, logsBucket, sour
 }
 
 /**
+ * Build the CreateBuild request for several images in ONE build, in order. The docker daemon on the
+ * build VM keeps images between steps, so an image tagged with `localTag` can be used by a later
+ * image's `FROM`. Pushed images get the registry cache (`--cache-from <repo>:latest`).
+ *
+ * @param {object} opts Same as buildRequest, except instead of repository/refs/dockerfile/buildArgs:
+ * @param {Array<{name: string, repository: string|null, refs: string[], dockerfile: string, context: string,
+ *   buildArgs: string[], localTag: string|null, push: boolean}>} opts.images
+ * @returns {{parent: string, projectId: string, build: object}}
+ */
+export function buildRequestMulti({ project, region, serviceAccount, logsBucket, source, images, noCache = false, timeoutSec }) {
+  const steps = [];
+  const pushed = [];
+  for (const img of images) {
+    const cacheRef = img.push && img.repository ? `${img.repository}:latest` : null;
+    const dockerArgs = ['build'];
+    if (noCache) dockerArgs.push('--no-cache');
+    else if (cacheRef) dockerArgs.push('--cache-from', cacheRef);
+    dockerArgs.push('--build-arg', 'BUILDKIT_INLINE_CACHE=1');
+    for (const arg of img.buildArgs || []) dockerArgs.push('--build-arg', arg);
+    const tags = [...(img.push ? img.refs : []), ...(img.localTag ? [img.localTag] : [])];
+    for (const ref of tags) dockerArgs.push('-t', ref);
+    dockerArgs.push('-f', img.dockerfile, img.context || '.');
+    if (cacheRef && !noCache) {
+      steps.push({ id: `pull-cache-${img.name}`, name: DOCKER_BUILDER, entrypoint: 'bash', args: ['-c', `docker pull ${cacheRef} || true`] });
+    }
+    steps.push({ id: `build-${img.name}`, name: DOCKER_BUILDER, env: ['DOCKER_BUILDKIT=1'], args: dockerArgs });
+    if (img.push) pushed.push(...img.refs);
+  }
+  const storageSource = { bucket: source.bucket, object: source.object };
+  if (source.generation) storageSource.generation = source.generation;
+  const build = {
+    source: { storageSource },
+    steps,
+    timeout: { seconds: timeoutSec },
+    serviceAccount: `projects/${project}/serviceAccounts/${serviceAccount}`,
+    logsBucket: `gs://${logsBucket}`,
+    options: { logging: 'GCS_ONLY' },
+    tags: [BUILD_TAG],
+  };
+  if (pushed.length) build.images = pushed;
+  return { parent: `projects/${project}/locations/${region}`, projectId: project, build };
+}
+
+/**
  * Submit the build and return its id straight from the operation metadata (no LRO wait).
  * @param {object} opts
  * @param {import('@google-cloud/cloudbuild').CloudBuildClient} opts.cloudBuild Injected client.
