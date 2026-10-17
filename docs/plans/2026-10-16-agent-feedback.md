@@ -42,12 +42,12 @@ new JSON fields:
 
 Files: `src/config.js`, `src/servers.js`, `src/ssh.js`, `src/status.js`, `src/usage.js`, `src/cli.js`, `setup/setup.ps1`, `setup/setup.sh` · Test `test/home.test.js`
 
-- [ ] Tests: `userHome` returns `DOCKERISER_CONFIG_DIR`'s parent semantics via `configDir`; with
+- [x] Tests: `userHome` returns `DOCKERISER_CONFIG_DIR`'s parent semantics via `configDir`; with
   `osHome` lacking config and `realHome` having it, returns `realHome`; with neither, returns `realHome`;
   `os.userInfo()` throwing falls back to `osHome`; `homeSearch` lists both config paths;
   `resolveConfig` no-project error `fix` names every searched path; `getOfflineStatus` exposes `home` + `searched`.
-- [ ] Red: `node --test test/home.test.js` → FAIL (`userHome` not exported)
-- [ ] Implement:
+- [x] Red: `node --test test/home.test.js` → FAIL (`userHome` not exported)
+- [x] Implement:
   ```js
   export function userHome({ env = process.env, osHome = os.homedir(), realHome = safeRealHome(), exists = fs.existsSync } = {}) {
     const homes = [...new Set([osHome, realHome].filter(Boolean))];
@@ -58,96 +58,96 @@ Files: `src/config.js`, `src/servers.js`, `src/ssh.js`, `src/status.js`, `src/us
   }
   ```
   setup.ps1: `$ConfigDir = if ($env:DOCKERISER_CONFIG_DIR) { … } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.dockeriser' }`; setup.sh: `${DOCKERISER_CONFIG_DIR:-$HOME/.dockeriser}`.
-- [ ] Green: `npm test` → all pass
-- [ ] Commit: `fix(config): find ~/.dockeriser in the real profile when USERPROFILE points elsewhere (#2)`
+- [x] Green: `npm test` → all pass
+- [x] Commit: `fix(config): find ~/.dockeriser in the real profile when USERPROFILE points elsewhere (#2)`
 
 ### Task 2: several images and digests on deploy (#3, #4)
 
 Files: `src/image.js`, `src/deploy.js`, `src/cli.js` · Test `test/deploy.test.js`, `test/cli.test.js`
 
-- [ ] Tests: `build --image a --image b` → exit 2 "one --image"; `planDeploy` with `image: ['a','b']`,
+- [x] Tests: `build --image a --image b` → exit 2 "one --image"; `planDeploy` with `image: ['a','b']`,
   `tag-as: ['a:prod','b:prod']`, mode load-only → two items paired in order; mixed `name=ref` + bare → error;
   count mismatch → error; `parseDeployImage('web@sha256:<64>')` → digest set, tag null; `executeDeploy`
   dry-run with a digest item makes no registry call; bad digest → ConfigError; `deploy --build --image a --image b`
   with dockeriser.json images a, b builds `--only a,b`.
-- [ ] Red → FAIL; implement `OPTIONS.image.multiple = true`, `parseTagAs(values, names)` positional branch,
+- [x] Red → FAIL; implement `OPTIONS.image.multiple = true`, `parseTagAs(values, names)` positional branch,
   `parseDeployImage()`; Green: `npm test` → pass
-- [ ] Commit: `feat(deploy): several --image values, positional --tag-as, deploy by digest (#3 #4)`
+- [x] Commit: `feat(deploy): several --image values, positional --tag-as, deploy by digest (#3 #4)`
 
 ### Task 3: deploy settings outside the repo (#6)
 
 Files: `src/project-state.js`, `src/deploy.js`, `src/cli.js` · Test `test/deploy.test.js`
 
-- [ ] Tests: first deploy (fake ssh) writes `~/.dockeriser/projects/<name>-<hash>.json`, not dockeriser.json;
+- [x] Tests: first deploy (fake ssh) writes `~/.dockeriser/projects/<name>-<hash>.json`, not dockeriser.json;
   then `rollback` and `logs` with no flags resolve the same server and items; `--save` writes dockeriser.json;
   `--no-save` writes neither; `--save --no-save` → exit 2; a dockeriser.json deploy section wins over the saved one;
   explicit `--image` deploys save `imageRefs`.
-- [ ] Implement `stateFile(homeDir, root)`, `readProjectState`, `writeProjectState`; `planDeploy({…, homeDir})`
+- [x] Implement `stateFile(homeDir, root)`, `readProjectState`, `writeProjectState`; `planDeploy({…, homeDir})`
   merges `d = project.deploy || saved.deploy`; `saveDeploySection(plan, {where})`.
-- [ ] Commit: `feat(deploy): keep deploy settings per user, --save writes dockeriser.json (#6)`
+- [x] Commit: `feat(deploy): keep deploy settings per user, --save writes dockeriser.json (#6)`
 
 ### Task 4: timings and secret-looking build args (#9)
 
 Files: `src/deploy.js`, `src/build.js`, `src/project.js`, `src/cli.js` · Test `test/deploy.test.js`, `test/build.test.js`, `test/project.test.js`
 
-- [ ] Tests: deploy result has numeric `durationSec` and `timings.{checkSec,transferSec,uploadSec,scriptSec}`;
+- [x] Tests: deploy result has numeric `durationSec` and `timings.{checkSec,transferSec,uploadSec,scriptSec}`;
   `stepDurations(build)` maps `build-<name>` step timing to seconds; single-image build gets its `build` step;
   `secretLookingArgs(['API_TOKEN=x','NEXT_PUBLIC_KEY=y','DB_PASSWORD=z'])` → `['API_TOKEN','DB_PASSWORD']`.
-- [ ] Commit: `feat: deploy durations, per-image build durations, warn on secret-looking build args (#9)`
+- [x] Commit: `feat: deploy durations, per-image build durations, warn on secret-looking build args (#9)`
 
 ### Task 5: prebuild and local-base discoverability (#5)
 
 Files: `src/project.js`, `src/cli.js`, `src/init.js`, docs · Test `test/project.test.js`, `test/cli.test.js`
 
-- [ ] Tests: `prebuild` must be a non-empty string; `build --dry-run` runs the selected images' prebuild
+- [x] Tests: `prebuild` must be a non-empty string; `build --dry-run` runs the selected images' prebuild
   (writes a marker file into the context, which then appears in the package); a failing prebuild → exit 2
   naming the image; `--only web` skips app's prebuild; `init` notes a FROM of another image's `localTag`.
-- [ ] Commit: `feat(build): per-image prebuild command; point at same-build local bases (#5)`
+- [x] Commit: `feat(build): per-image prebuild command; point at same-build local bases (#5)`
 
 ### Task 6: upload and keep-env (#7)
 
 Files: `src/remote.js`, `src/deploy.js`, `src/project.js`, `src/cli.js` · Test `test/deploy.test.js`
 
-- [ ] Tests: `parseUpload('C:\\x\\b:/opt/app')` → `{from, to:'/opt/app'}`; relative remote → error;
+- [x] Tests: `parseUpload('C:\\x\\b:/opt/app')` → `{from, to:'/opt/app'}`; relative remote → error;
   missing local → error; `uploadScript` passes `bash -n`; run it locally with bash against a temp
   "remote" dir fed by a real tar stream: files land, `.env` keeps `APP_IMAGE` from the old file and
   drops the bundle's value; broken stream changes nothing; `executeDeploy` uses exactly one extra ssh
   exec for two uploads, before the deploy script, and records `uploads[]`; `--keep-env` without `--upload` → error.
-- [ ] Commit: `feat(deploy): --upload folders over one SSH connection, --keep-env server lines (#7)`
+- [x] Commit: `feat(deploy): --upload folders over one SSH connection, --keep-env server lines (#7)`
 
 ### Task 7: image cleanup keeps 20 (#10)
 
 Files: `src/cleanup.js`, `src/cli.js`, `src/usage.js`, `setup/*`, `plugin/skills/cleanup/SKILL.md` · Test `test/cleanup.test.js`, `test/plugin.test.js`
 
-- [ ] Tests: `planCleanup(versions, 20)` keeps the 20 newest per package and anything tagged `latest`;
+- [x] Tests: `planCleanup(versions, 20)` keeps the 20 newest per package and anything tagged `latest`;
   `cleanupPolicy(20)` JSON = keep-20 + delete-older-than-1d; command with a fake gcloud: sets the policy,
   deletes only planned digests with `--delete-tags`, `--dry-run` deletes and sets nothing; gcloud failure → error with fix.
-- [ ] Commit: `feat: dockeriser cleanup keeps the 20 newest versions of each image (#10)`
+- [x] Commit: `feat: dockeriser cleanup keeps the 20 newest versions of each image (#10)`
 
 ### Task 8: parallel builds (#8)
 
 Files: `src/project.js`, `src/cli.js` · Test `test/project.test.js`, `test/cli.test.js`
 
-- [ ] Tests: `buildGroups` of base→app, web, proxy → `[[base, app], [web], [proxy]]` in file order;
+- [x] Tests: `buildGroups` of base→app, web, proxy → `[[base, app], [web], [proxy]]` in file order;
   `parallel: false` / `--sequential` → one group; CLI run with a fake Cloud Build client: three
   `createBuild` calls sharing one source object, logs prefixed `[web] `, merged JSON has `builds[]`,
   aggregate status FAILURE when one fails, `buildMinutes` summed; SIGINT cancels every build; usage cache
   records all three.
-- [ ] Commit: `feat(build): build independent images in parallel Cloud Builds (#8)`
+- [x] Commit: `feat(build): build independent images in parallel Cloud Builds (#8)`
 
 ### Task 9: docs, version
 
-- [ ] README, skills, migration doc, RESEARCH note (waitFor/one VM, 10–30 concurrent builds), 0.4.0.
-- [ ] Commit: `docs+plugin: 0.4.0 — feedback from the appraiseme ship (#2–#10)`
+- [x] README, skills, migration doc, RESEARCH note (waitFor/one VM, 10–30 concurrent builds), 0.4.0.
+- [x] Commit: `docs+plugin: 0.4.0 — feedback from the appraiseme ship (#2–#10)`
 
 ## Verification
 
-- [ ] `npm test` → all pass
-- [ ] `node bin/dockeriser.js build examples/hello --image hello --project demo-proj --dry-run` → request JSON
-- [ ] `node bin/dockeriser.js build examples/hello --image hello` (real) → SUCCESS
-- [ ] `bash -n setup/setup.sh` and the PowerShell parser check of `setup/setup.ps1` → no errors
-- [ ] `USERPROFILE=C:\Users\camer\.claude-appraiseme node bin/dockeriser.js status --offline` → configured
-- [ ] `node bin/dockeriser.js cleanup --dry-run` then `cleanup` → policy keeps 20
+- [x] `npm test` → all pass
+- [x] `node bin/dockeriser.js build examples/hello --image hello --project demo-proj --dry-run` → request JSON
+- [x] `node bin/dockeriser.js build examples/hello --image hello` (real) → SUCCESS
+- [x] `bash -n setup/setup.sh` and the PowerShell parser check of `setup/setup.ps1` → no errors
+- [x] `USERPROFILE=C:\Users\camer\.claude-appraiseme node bin/dockeriser.js status --offline` → configured
+- [x] `node bin/dockeriser.js cleanup --dry-run` then `cleanup` → policy keeps 20
 - [ ] owner's check: an appraiseme agent ships with one `dockeriser deploy`
 
 ## Deviations
