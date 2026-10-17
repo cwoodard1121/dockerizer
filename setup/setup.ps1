@@ -234,18 +234,18 @@ try {
     Write-Ok "created image repo $Region-docker.pkg.dev/$Project/$Repo"
   }
   # A Keep rule alone deletes nothing, so pair it with a Delete rule: anything older than a day
-  # goes, except the 10 newest versions of each image.
+  # goes, except the 20 newest versions of each image.
   $policyFile = Join-Path $env:TEMP 'dockeriser-cleanup-policy.json'
   Write-Utf8File $policyFile @'
 [
-  { "name": "keep-10-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 10 } },
+  { "name": "keep-20-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 20 } },
   { "name": "delete-older-than-1d", "action": { "type": "Delete" }, "condition": { "tagState": "any", "olderThan": "1d" } }
 ]
 '@
   $cleanup = Test-Gcloud artifacts repositories set-cleanup-policies $Repo --location $Region --project $Project --policy $policyFile --no-dry-run --quiet
   Remove-Item $policyFile -Force
   if (-not $cleanup.Ok) { throw 'could not set the image cleanup policy' }
-  Write-Ok 'image cleanup set (keeps the 10 newest versions of each image)'
+  Write-Ok 'image cleanup set (keeps the 20 newest versions of each image)'
 
   # ---------------------------------------------------------------------- 7. buckets
   foreach ($pair in @(@($SrcBucket, 1), @($LogsBucket, 30))) {

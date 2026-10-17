@@ -30,6 +30,7 @@ import { createSshRunner } from './ssh.js';
 import { addServer, checkServer, createGcloudRunner, printChecks } from './server.js';
 import { listServers, removeServer, resolveServer } from './servers.js';
 import { runInit } from './init.js';
+import { DEFAULT_KEEP, runCleanup } from './cleanup.js';
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -136,6 +137,8 @@ const OPTIONS = {
   key: { type: 'string' },
   'install-docker': { type: 'boolean', default: false },
   force: { type: 'boolean', default: false },
+  // cleanup
+  keep: { type: 'string' },
 };
 
 /** Default process hooks for SIGINT; tests replace this. */
@@ -212,6 +215,7 @@ export async function run(argv, deps = {}) {
     logs: logsCommand,
     server: serverCommand,
     init: initCommand,
+    cleanup: cleanupCommand,
   };
   if (handlers[command]) {
     const out = createOutput({ json: flags.json || (flags['dry-run'] && (command === 'deploy' || command === 'rollback')), stdout, stderr, env });
@@ -223,7 +227,7 @@ export async function run(argv, deps = {}) {
   }
   if (command !== 'build') {
     const out = createOutput({ json: flags.json, stdout, stderr, env });
-    return fail(out, new ConfigError(`Unknown command "${command}".`, { fix: 'Commands: build, deploy, rollback, logs, server, init, login, usage, status, doctor. Run `dockeriser --help`.' }), flags.json);
+    return fail(out, new ConfigError(`Unknown command "${command}".`, { fix: 'Commands: build, deploy, rollback, logs, server, init, cleanup, login, usage, status, doctor. Run `dockeriser --help`.' }), flags.json);
   }
 
   // Dry runs keep stdout for the request JSON only.
@@ -611,6 +615,29 @@ async function serverCommand({ flags, rest, env, homeDir, tmpDir, deps, out }) {
     return EXIT.OK;
   }
   throw new ConfigError(`Unknown server command "${sub}".`, { fix: 'Use: server add | list | check | remove' });
+}
+
+/** `dockeriser cleanup [--keep 20] [--dry-run]` */
+async function cleanupCommand({ flags, env, homeDir, tmpDir, deps, out }) {
+  const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
+  const keep = flags.keep === undefined ? DEFAULT_KEEP : Number(flags.keep);
+  if (!Number.isInteger(keep) || keep < 1) throw new ConfigError(`--keep "${flags.keep}" must be a whole number of versions, 1 or more.`);
+  const dryRun = flags['dry-run'];
+  out.step(`${dryRun ? 'Checking' : 'Cleaning up'} ${cfg.region}-docker.pkg.dev/${cfg.project}/${cfg.repo} (keeping the ${keep} newest versions of each image)`);
+  const res = runCleanup({ gcloud: deps.gcloud || createGcloudRunner({ env }), cfg, keep, dryRun, tmpDir, out });
+  if (flags.json) {
+    out.result(res);
+    return EXIT.OK;
+  }
+  for (const i of res.images) {
+    out.info(`  ${i.name.padEnd(24)} ${String(i.versions).padStart(3)} version${i.versions === 1 ? ' ' : 's'}, keeping ${i.kept}, ${dryRun ? 'would delete' : 'deleted'} ${i.deleting.length}`);
+  }
+  const n = dryRun ? res.wouldDelete : res.deleted;
+  out.ok(`${dryRun ? 'Would delete' : 'Deleted'} ${n} old version${n === 1 ? '' : 's'}${res.bytesFreedUpTo ? ` (up to ${formatBytes(res.bytesFreedUpTo)}; layers shared with kept versions stay)` : ''}.`);
+  out.info(dryRun
+    ? 'Dry run: nothing deleted and the cleanup policy not changed. Run without --dry-run to do it.'
+    : `Cleanup policy: keep the ${keep} newest versions of each image; Artifact Registry deletes older ones about once a day.`);
+  return EXIT.OK;
 }
 
 /** `dockeriser init [dir] [--force] [--dry-run]` */
