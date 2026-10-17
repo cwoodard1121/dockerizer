@@ -24,7 +24,7 @@ import {
 } from './usage.js';
 import { createClients as realCreateClients } from './clients.js';
 import { loadProject, readBuildArgsFile, resolveBuildArgs, selectImages, splitList } from './project.js';
-import { executeDeploy, planDeploy, saveDeploySection, streamLogs } from './deploy.js';
+import { executeDeploy, imageFlags, planDeploy, saveDeploySection, streamLogs } from './deploy.js';
 import { createRegistryClient } from './registry.js';
 import { createSshRunner } from './ssh.js';
 import { addServer, checkServer, createGcloudRunner, printChecks } from './server.js';
@@ -90,7 +90,7 @@ Exit codes: 0 success, 1 build or deploy failed, 2 config/input error, 3 credent
             4 upload error, 130 interrupted (build cancelled).`;
 
 const OPTIONS = {
-  image: { type: 'string', short: 'i' },
+  image: { type: 'string', short: 'i', multiple: true },
   tag: { type: 'string', short: 't', multiple: true },
   dockerfile: { type: 'string', short: 'f' },
   'build-arg': { type: 'string', multiple: true },
@@ -184,6 +184,9 @@ export async function run(argv, deps = {}) {
   }
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
+  // --image repeats only for deploy; every other command takes one.
+  const imageList = flags.image || [];
+  flags.image = command === 'deploy' ? (imageList.length ? imageList : undefined) : imageList[0];
 
   if (flags.version) {
     stdout.write(`${VERSION}\n`);
@@ -223,6 +226,9 @@ export async function run(argv, deps = {}) {
   const out = createOutput({ json: flags.json || flags['dry-run'], stdout, stderr, env });
   try {
     if (rest.length > 1) throw new ConfigError(`Unexpected extra argument "${rest[1]}".`, { fix: 'Pass one folder; quote paths with spaces.' });
+    if (imageList.length > 1) {
+      throw new ConfigError(`build takes one --image (got ${imageList.length}: ${imageList.join(', ')}).`, { fix: 'List several images in dockeriser.json and run `dockeriser build` (or --only a,b), or run one build per image.' });
+    }
     const dir = rest[0] || (flags.image ? null : cwd);
     if (!dir) throw new ConfigError('Missing <dir>.', { fix: 'Usage: dockeriser build <dir> --image <name>[:<tag>]' });
     const built = await runBuild({ ...ctx, out, dir });
@@ -462,6 +468,23 @@ async function deployWith({ flags, env, homeDir, createClients, deps, out, dir, 
   return result;
 }
 
+/**
+ * What `deploy --build` builds: one --image as an ad-hoc build, several --image values as the
+ * matching dockeriser.json images (--only), none as the whole dockeriser.json list.
+ */
+function buildSelection(dir, images) {
+  if (images.length <= 1) return { image: images[0] };
+  const project = loadProject(dir);
+  const find = (n) => project.images.find((i) => i.name === n || i.image === n);
+  const missing = images.filter((n) => !find(n));
+  if (missing.length) {
+    throw new ConfigError(`deploy --build with several --image values builds them from ${project.file}, which has no image ${missing.join(', ')}.`, {
+      fix: project.images.length ? `Images there: ${project.images.map((i) => i.name).join(', ')}.` : 'Run `dockeriser init`, or build and deploy one --image at a time.',
+    });
+  }
+  return { image: undefined, only: images.map((n) => find(n).name) };
+}
+
 /** `dockeriser deploy [dir] --to <server> ...` */
 async function deployCommand(ctx) {
   const { flags, rest, cwd, out } = ctx;
@@ -469,7 +492,7 @@ async function deployCommand(ctx) {
   let built = null;
   let buildSummary = null;
   if (flags.build) {
-    const b = await runBuild({ ...ctx, dir, flags: { ...flags, json: true, image: flags.image } });
+    const b = await runBuild({ ...ctx, dir, flags: { ...flags, json: true, ...buildSelection(dir, imageFlags(flags)) } });
     if (b.dryRun) return EXIT.OK;
     buildSummary = b.summary;
     if (!flags.json) {

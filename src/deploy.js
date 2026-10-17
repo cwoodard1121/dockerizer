@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { ConfigError, DockeriserError, EXIT } from './errors.js';
-import { expandImage } from './image.js';
+import { expandImage, parseDeployImage } from './image.js';
 import { canonicalMode, loadProject, splitList, validateDeployTarget, writeProjectFile } from './project.js';
 import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, stateKey } from './remote.js';
 import { archiveSize, progressText, saveArchiveStream } from './save-tar.js';
@@ -26,16 +26,38 @@ import { sshError } from './ssh.js';
 /** Exit code for a deploy that reached the server but failed (health check, rollback, --then). */
 export const DEPLOY_FAILED = EXIT.BUILD_FAILED;
 
-/** Split repeated `--tag-as` values: `name=ref` pairs, or one bare ref for a single image. */
-export function parseTagAs(values = [], names = []) {
+/**
+ * Split repeated `--tag-as` values: `name=ref` pairs, one bare ref for a single image, or one bare
+ * ref per image in `--image` order (`positional`, when the counts match).
+ */
+export function parseTagAs(values = [], names = [], { positional = false } = {}) {
+  const named = (v) => {
+    const eq = v.indexOf('=');
+    return eq > 0 && !v.slice(0, eq).includes(':') && !v.slice(0, eq).includes('/') ? [v.slice(0, eq), v.slice(eq + 1)] : null;
+  };
+  const bare = values.filter((v) => !named(v));
+  if (bare.length && bare.length < values.length && names.length > 1) {
+    throw new ConfigError('--tag-as values mix <image>=<name:tag> and bare <name:tag> forms.', { fix: 'Use one form: all <image>=<name:tag>, or one bare value per --image, in the same order.' });
+  }
+  if (positional && names.length > 1 && bare.length === values.length && values.length) {
+    if (values.length !== names.length) {
+      throw new ConfigError(`${values.length} --tag-as value${values.length === 1 ? '' : 's'} for ${names.length} images.`, { fix: 'Pass one --tag-as per --image, in the same order, or use --tag-as <image>=<name:tag>.' });
+    }
+    return Object.fromEntries(names.map((n, i) => [n, values[i]]));
+  }
   const map = {};
   for (const v of values) {
-    const eq = v.indexOf('=');
-    if (eq > 0 && !v.slice(0, eq).includes(':') && !v.slice(0, eq).includes('/')) map[v.slice(0, eq)] = v.slice(eq + 1);
+    const pair = named(v);
+    if (pair) map[pair[0]] = pair[1];
     else if (names.length === 1) map[names[0]] = v;
     else throw new ConfigError(`--tag-as "${v}" does not say which image it is for.`, { fix: `With several images use --tag-as <image>=<name:tag>, e.g. --tag-as ${names[0] || 'web'}=myapp-web:prod.` });
   }
   return map;
+}
+
+/** The deploy `--image` values as a list (the CLI passes an array; older callers a string). */
+export function imageFlags(flags) {
+  return [].concat(flags.image ?? []).filter(Boolean);
 }
 
 /** Short image name: last path part of a repository. */
@@ -66,11 +88,17 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   if (built) {
     sources = built.map((b) => ({ name: b.name, repository: b.repository, digest: b.digest }));
     // Built images that the deploy section does not map (e.g. a pushed base image) stay put.
-    if (only.length) sources = sources.filter((s) => only.includes(s.name));
+    const wanted = imageFlags(flags);
+    if (wanted.length > 1) sources = wanted.map((n) => sources.find((s) => s.name === n || shortName(s.repository) === n)).filter(Boolean); // --image order, for --tag-as pairing
+    else if (only.length) sources = sources.filter((s) => only.includes(s.name));
     else if (d.images && Object.keys(d.images).length && sources.some((s) => d.images[s.name])) sources = sources.filter((s) => d.images[s.name]);
-  } else if (flags.image) {
-    const img = expandImage({ image: flags.image, project: cfg.project, region: cfg.region, repo: cfg.repo, fallbackTag: () => 'latest' });
-    sources = [{ name: shortName(img.repository), repository: img.repository, tag: img.tags[0] }];
+  } else if (imageFlags(flags).length) {
+    sources = imageFlags(flags).map((v) => parseDeployImage(v, cfg));
+    const seen = new Set();
+    for (const s of sources) {
+      if (seen.has(s.name)) throw new ConfigError(`--image names "${s.name}" twice.`, { fix: 'Deploy each image once; pick one tag or digest.' });
+      seen.add(s.name);
+    }
   } else if (project.images.length) {
     let list = project.images.filter((i) => i.push);
     if (only.length) list = list.filter((i) => only.includes(i.name));
@@ -90,7 +118,7 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
     });
   }
 
-  const tagAs = parseTagAs(flags['tag-as'] || [], sources.map((s) => s.name));
+  const tagAs = parseTagAs(flags['tag-as'] || [], sources.map((s) => s.name), { positional: imageFlags(flags).length > 1 });
   const flagServices = splitList(flags.service);
   const items = sources.map((s, i) => {
     const conf = d.images?.[s.name] || {};

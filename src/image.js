@@ -123,3 +123,25 @@ export function expandImage({ image, extraTags = [], project, region, repo, fall
   const refs = tags.map((t) => `${repository}:${t}`);
   return { repository, tags, refs, primary: refs[0] };
 }
+
+const DIGEST = /^sha256:[a-f0-9]{64}$/;
+
+/**
+ * Parse a deploy `--image`: `name[:tag]`, a full Artifact Registry path, either one with
+ * `@sha256:<digest>` to pin the exact image (builds still refuse digests; deploys accept them).
+ * @param {string} value
+ * @param {{project: string, region: string, repo: string}} cfg
+ * @returns {{name: string, repository: string, tag: string|null, digest: string|null}}
+ */
+export function parseDeployImage(value, { project, region, repo }) {
+  const text = String(value).trim();
+  const at = text.indexOf('@');
+  const digest = at >= 0 ? text.slice(at + 1) : null;
+  if (digest !== null && !DIGEST.test(digest)) {
+    throw new ConfigError(`--image "${text}" has a malformed digest (expected sha256:<64 hex characters>).`, { fix: 'Use <image>@sha256:<64 hex characters>, as printed by `dockeriser build`.' });
+  }
+  const ref = at >= 0 ? text.slice(0, at) : text;
+  const img = expandImage({ image: ref, project, region, repo, fallbackTag: () => 'latest' });
+  const explicitTag = splitTag(ref).tag || null;
+  return { name: img.repository.split('/').pop(), repository: img.repository, tag: digest ? explicitTag : img.tags[0], digest };
+}

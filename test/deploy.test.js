@@ -12,6 +12,7 @@ import { deployScript, dkRef, parseMarks, probeScript, logsScript, installPuller
 import { archiveSize, progressText, saveArchiveStream, saveManifest, tarHeader } from '../src/save-tar.js';
 import { pickPlatform, createRegistryClient, MEDIA } from '../src/registry.js';
 import { executeDeploy, planDeploy, parseTagAs, saveDeploySection } from '../src/deploy.js';
+import { parseDeployImage } from '../src/image.js';
 import { tempTree, sink } from './helpers.js';
 import { createOutput } from '../src/output.js';
 
@@ -364,4 +365,34 @@ test('deploy dry run prints the script without the env file contents', async () 
   assert.equal(result.status, 'DRY_RUN');
   assert.ok(!result.script.includes(Buffer.from('SECRET=hunter2\n').toString('base64')));
   assert.ok(!result.script.includes('hunter2'));
+});
+
+test('deploy several --image values, paired in order with bare --tag-as values', () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web:v2'], 'tag-as': ['app:demo', 'web:demo'] }, cfg: CFG, homeDir: home, env: {} });
+  assert.deepEqual(plan.items.map((i) => [i.name, i.repository, i.tag, i.tagAs]), [
+    ['app', `${REPO}/app`, 'latest', 'app:demo'],
+    ['web', `${REPO}/web`, 'v2', 'web:demo'],
+  ]);
+  const named = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['web=web:x', 'app=app:x'] }, cfg: CFG, homeDir: home, env: {} });
+  assert.deepEqual(named.items.map((i) => i.tagAs), ['app:x', 'web:x']);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['app:demo'] }, cfg: CFG, homeDir: home, env: {} }), /1 --tag-as value.*2 images/);
+  assert.throws(() => parseTagAs(['app=app:x', 'web:x'], ['app', 'web']), /mix/);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', image: ['app', 'web'] }, cfg: CFG, homeDir: home, env: {} }), /Mode "run" starts one container/);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'app:v2'], 'tag-as': ['a:1', 'a:2'] }, cfg: CFG, homeDir: home, env: {} }), /twice/);
+});
+
+test('deploy by digest: the exact image, no tag lookup', async () => {
+  const { home, dir } = deployFixture(null);
+  const digest = `sha256:${'ab'.repeat(32)}`;
+  assert.deepEqual(parseDeployImage(`web@${digest}`, CFG), { name: 'web', repository: `${REPO}/web`, tag: null, digest });
+  assert.equal(parseDeployImage(`${REPO}/web:v1@${digest}`, CFG).tag, 'v1');
+  assert.deepEqual(parseDeployImage('web', CFG), { name: 'web', repository: `${REPO}/web`, tag: 'latest', digest: null });
+  assert.throws(() => parseDeployImage('web@sha256:abc', CFG), /sha256:<64 hex/);
+  const plan = planDeploy({ dir, flags: { to: 'prod', image: [`web@${digest}`] }, cfg: CFG, homeDir: home, env: {} });
+  assert.equal(plan.items[0].digest, digest);
+  const { o } = out();
+  const result = await executeDeploy({ plan, ssh: { exec: () => assert.fail('no ssh') }, getRegistry: () => assert.fail('a digest needs no lookup'), out: o, dryRun: true });
+  assert.equal(result.digest, digest);
+  assert.match(result.script, new RegExp(`web:dk-${'ab'.repeat(6)}`));
 });

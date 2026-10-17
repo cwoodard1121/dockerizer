@@ -265,3 +265,23 @@ test('first Ctrl-C cancels the build and exits 130; JSON still printed', async (
   assert.equal(out.status, 'CANCELLED');
   assert.equal(out.exitCode, 130);
 });
+
+test('build refuses a repeated --image; deploy --build --image a --image b builds those dockeriser.json images', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home });
+  assert.equal(await run(['build', HELLO, '--image', 'a', '--image', 'b', '--json'], d), 2);
+  assert.match(JSON.parse(d.stdout.text()).error.message, /one --image/);
+
+  const dir = tempTree({
+    'a/Dockerfile': 'FROM alpine\n',
+    'b/Dockerfile': 'FROM alpine\n',
+    'c/Dockerfile': 'FROM alpine\n',
+    'dockeriser.json': JSON.stringify({ images: [{ name: 'a', context: 'a' }, { name: 'b', context: 'b' }, { name: 'c', context: 'c' }] }),
+  });
+  const d2 = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'b', '--to', 'root@203.0.113.5', '--mode', 'load-only', '--dry-run'], d2), 0);
+  const steps = JSON.parse(d2.stdout.text()).request.build.steps.map((s) => s.id);
+  assert.deepEqual(steps.filter((s) => s.startsWith('build-')), ['build-a', 'build-b']);
+  const d3 = deps({ env, homeDir: home });
+  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'zz', '--to', 'root@203.0.113.5', '--dry-run', '--json'], d3), 2);
+});
