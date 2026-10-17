@@ -348,3 +348,15 @@ export function removeTarball(file) {
   fs.rmSync(file, { force: true });
   activeTempFiles.delete(file);
 }
+
+/**
+ * Tar + gzip an explicit list of files (POSIX paths relative to `root`), for `dockeriser ci`.
+ * @param {string} root
+ * @param {string[]} files
+ * @param {{tmpDir?: string, warn?: (msg: string) => void}} [opts]
+ * @returns {Promise<{path: string, bytes: number, fileCount: number, sha256: string}>}
+ */
+export async function packageFiles(root, files, { tmpDir = os.tmpdir(), warn = () => {} } = {}) {
+  if (!files.length) throw new ConfigError(`Nothing to upload from ${root}.`, { fix: 'Run it in the project folder.' });
+  return writeTarball(path.resolve(root), files, { tmpDir, warn, ignoreFile: '.gitignore' });
+}

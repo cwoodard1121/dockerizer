@@ -208,7 +208,7 @@ try {
 
   # ---------------------------------------------------------------------- 4. APIs
   $apis = @('cloudbuild.googleapis.com', 'artifactregistry.googleapis.com', 'storage.googleapis.com', 'iam.googleapis.com',
-    'iamcredentials.googleapis.com', 'logging.googleapis.com', 'serviceusage.googleapis.com', 'billingbudgets.googleapis.com')
+    'iamcredentials.googleapis.com', 'logging.googleapis.com', 'serviceusage.googleapis.com', 'billingbudgets.googleapis.com', 'compute.googleapis.com')
   $enabled = (Test-Gcloud services list --enabled --project $Project '--format=value(config.name)').Out -split "`n"
   $missing = @($apis | Where-Object { $enabled -notcontains $_ })
   if ($missing.Count -gt 0) {

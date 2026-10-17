@@ -44,6 +44,7 @@ After the plugin is installed (see [Claude Code plugin](#claude-code-plugin)):
 | `/dockeriser:setup [project-id]` | Asks in chat which Google Cloud project to use (lists yours, or offers to create one), then runs the setup script. |
 | `/dockeriser:doctor` | Online check of every piece of setup; explains each failure and its fix. |
 | `/dockeriser:status` | Instant local check (no network): set up or not, and this month's usage line. |
+| `/dockeriser:ci [dir]` | Runs the project's heavy test gate (the `"ci"` steps of `dockeriser.json`: full check, integration, e2e) on a fresh cloud VM instead of your PC, about 3 cents a run. `ci init` writes the steps from your GitHub workflow. |
 | `/dockeriser:usage` | Free build-minutes used this month, the month-end projection, any estimated cost and image storage. |
 | `/dockeriser:login` | What's left to do to sign in, if anything. |
 
@@ -201,6 +202,44 @@ month is free, then it's about $0.12/GiB in North America.
 
 Numbers and sources: [docs/RESEARCH.md](docs/RESEARCH.md#5-deploying-to-a-server-checked-2026-10-16).
 
+## Run heavy test gates on a VM (`dockeriser ci`)
+
+Long gates (a full `npm run check`, integration suites, Playwright e2e against Postgres and friends in
+Docker Compose) can eat your PC's memory for half an hour. `dockeriser ci` runs them on a fresh
+Google Cloud **spot VM** (4 vCPU, 16 GB, Ubuntu 24.04 with Docker, Compose and your Node) and deletes it
+afterwards. It never uses the free Cloud Build minutes your image builds need.
+
+1. Write the steps once. `dockeriser ci init` reads the `run:` steps of your GitHub workflows (in order,
+   leaving out `if: failure()`/`always()` clean-up steps and repeats), or package.json, and adds:
+   ```json
+   { "ci": { "steps": ["npm ci", "npm run check", "npm run dev:services", "npm run test:e2e"] } }
+   ```
+   Optional: `"machine"` (an E2 type, default `e2-standard-4`), `"diskGb"` (40), `"timeout"` (`60m`),
+   `"node"` (default: `.node-version`, `.nvmrc`, else the latest LTS), `"env"` (public values only;
+   `CI=true` is always set), `"docker": false` to skip installing Docker.
+2. Run it: `dockeriser ci` (or `/dockeriser:ci`). It uploads what `git add -A` would commit (never
+   ignored files like `.env` or `node_modules`), starts the VM, streams the log, stops at the first
+   failing step, deletes the VM and prints the cost. A failure shows the step, the last log lines and
+   the full log file. The log also stays in the logs bucket for 30 days.
+
+**Cost.** Google's billing catalogue lists a Toronto spot e2-standard-4 at $0.0307/hour on 2026-10-16. With
+the 40 GB disk and its IP that is about $0.039/hour, so a 45-minute gate costs about 3 cents.
+
+**The cap.** Every run's estimated cost goes into one ledger per month in your logs bucket, shared by
+every PC and account. CI turns itself off for the rest of the month when the month's spend reaches
+**$5**, the same as the budget alert setup creates and about 160 full gates. From **day 7** it also turns off when the
+pace so far would pass $5 by month end. While it is off, `dockeriser ci` exits 5 and agents run
+their gates locally. The figure is hard-coded in `src/pricing.js`. `dockeriser ci enable` (the owner's override, never
+for agents) lifts only the pace check for the rest of the month. The $5 stop has no override.
+
+**Safety.** A spot VM Google takes back mid-run is retried once (`--no-retry` to skip). Every VM is
+created with a time limit of the gate timeout plus 15 minutes, after which Google deletes it. Each run
+first deletes leftover CI VMs (`dockeriser ci cleanup` does it on demand, `--force` for all of them). At most 4 run at once; a fifth waits.
+
+`dockeriser ci status` shows the month's spend, the pace, the last runs and any live CI VMs. VMs are created
+with your gcloud sign-in (like `cleanup`) and run as the `dockeriser` service account, which needs no
+new permissions. The Compute Engine API must be on (setup turns it on).
+
 ## Getting the image yourself
 
 A build pushes the image to Artifact Registry and prints its full address with the digest. Nothing is
@@ -242,6 +281,8 @@ dockeriser init [dir] [--force]        write a starter dockeriser.json (detects 
 dockeriser deploy [dir] --to <server>  see "Deploy to a server"; --dry-run prints the remote script
 dockeriser rollback [dir] | logs [dir] [--follow]
 dockeriser cleanup [--keep 20] [--dry-run]   keep the newest N versions of each image, delete the rest
+dockeriser ci [dir] [--machine] [--zone] [--timeout] [--no-retry] [--dry-run]   run the "ci" steps on a spot VM
+dockeriser ci init [dir] [--force] | ci status | ci cleanup [--force] | ci enable (owner only)
 dockeriser server add <name> --host <user@host> [--port] [--key] [--transfer ssh|pull] [--install-docker]
 dockeriser server list | check <name> | remove <name>
 dockeriser login                       next sign-in step(s), if any
@@ -293,6 +334,7 @@ Dockerfile is always included.
 | 2 | config or input problem (no project, bad flag, missing Dockerfile, API turned off) |
 | 3 | credentials or permission problem |
 | 4 | source upload failed |
+| 5 | `ci`: CI is off this month (the $5 spend cap or the day-7 pace check) |
 | 130 | interrupted with Ctrl-C (first Ctrl-C cancels the build and waits; a second quits at once) |
 
 ## `--json` result (for AI agents)

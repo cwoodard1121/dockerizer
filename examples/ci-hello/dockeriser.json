@@ -1,0 +1,12 @@
+{
+  "ci": {
+    "steps": [
+      "node --version && npm --version",
+      "node hello.mjs",
+      "docker run --rm hello-world | head -3",
+      "docker compose version"
+    ],
+    "node": "24",
+    "timeout": "15m"
+  }
+}

@@ -99,7 +99,15 @@ The build already pushed the image; nothing is pulled to this PC. Its address is
 - On a PC signed in to gcloud: `gcloud auth configure-docker <region>-docker.pkg.dev` once, then
   `docker pull <address>`.
 
-## 5. After building
+## 5. Heavy test gates go to a VM too
+
+A long gate (full `npm run check`, integration, Playwright e2e) eats this PC's memory for a long time.
+When the project's dockeriser.json has a `"ci"` section, run `CLI ci <dir> --json` instead: it runs the
+steps on a fresh spot VM and deletes it, about 3 cents a run, without using the free build minutes.
+`/dockeriser:ci` has the details. Exit 5 means CI is off for the month (the spend cap): run the gate
+locally and never run `ci enable`, which is the owner's override.
+
+## 6. After building
 
 If `usage.percent` is over 80 (or the line says "over by"), tell the user the usage line in one sentence.
 `/dockeriser:usage` gives the full picture. Image storage over the free 0.5 GB: the repo keeps the 20
