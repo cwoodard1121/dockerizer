@@ -18,13 +18,46 @@ const FIELDS = [
   { key: 'serviceAccount', env: 'DOCKERISER_SERVICE_ACCOUNT' },
 ];
 
+/** The OS account's own profile folder (not $HOME/%USERPROFILE%), or null when it cannot be read. */
+function realProfile() {
+  try {
+    return os.userInfo().homedir || null;
+  } catch {
+    return null; // some containers have no passwd entry
+  }
+}
+
 /**
- * Folder that holds config.json and (optionally) key.json.
- * @param {string} [homeDir]
+ * The home folder dockeriser uses for ~/.dockeriser and for ~ in key paths. Claude Code accounts run
+ * with USERPROFILE/HOME pointed at an account folder (C:\Users\me\.claude-work) where setup never
+ * wrote anything, so the OS account's real profile is tried too. The first one holding
+ * .dockeriser/config.json wins; with none, the real profile, so every account converges on one config.
+ * @param {{env?: Record<string, string|undefined>, osHome?: string, realHome?: string|null, exists?: (p: string) => boolean}} [opts]
  * @returns {string}
  */
-export function configDir(homeDir = os.homedir()) {
-  return path.join(homeDir, '.dockeriser');
+export function userHome({ env = process.env, osHome = os.homedir(), realHome = realProfile(), exists = fs.existsSync } = {}) {
+  const homes = [...new Set([osHome, realHome].filter(Boolean))];
+  return homes.find((h) => exists(path.join(configDir(h, env), 'config.json'))) || realHome || osHome;
+}
+
+/**
+ * Every config.json path userHome() looks at, in order (for "not found" messages).
+ * @param {{env?: Record<string, string|undefined>, osHome?: string, realHome?: string|null}} [opts]
+ * @returns {string[]}
+ */
+export function homeSearch({ env = process.env, osHome = os.homedir(), realHome = realProfile() } = {}) {
+  if (env.DOCKERISER_CONFIG_DIR) return [path.join(configDir(osHome, env), 'config.json')];
+  return [...new Set([osHome, realHome].filter(Boolean))].map((h) => path.join(configDir(h, env), 'config.json'));
+}
+
+/**
+ * Folder that holds config.json and (optionally) key.json: $DOCKERISER_CONFIG_DIR, else <home>/.dockeriser.
+ * @param {string} [homeDir]
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string}
+ */
+export function configDir(homeDir = userHome(), env = process.env) {
+  return env.DOCKERISER_CONFIG_DIR ? path.resolve(env.DOCKERISER_CONFIG_DIR) : path.join(homeDir, '.dockeriser');
 }
 
 /**
@@ -57,13 +90,14 @@ export function readConfigFile(file) {
  * @param {object} opts
  * @param {Record<string, string|undefined>} [opts.flags] Values from the command line.
  * @param {Record<string, string|undefined>} [opts.env] Environment (defaults to process.env).
- * @param {string} [opts.homeDir] Home folder (defaults to os.homedir()).
+ * @param {string} [opts.homeDir] Home folder (defaults to userHome()).
  * @param {boolean} [opts.requireProject=true] Throw ConfigError when no project is found.
+ * @param {string[]} [opts.searched] Every config file looked at, for the "no project" message.
  * @returns {{project?: string, region: string, repo: string, serviceAccount?: string,
  *   sources: Record<string, string>, configFile: string}}
  */
-export function resolveConfig({ flags = {}, env = process.env, homeDir = os.homedir(), requireProject = true } = {}) {
-  const configFile = path.join(configDir(homeDir), 'config.json');
+export function resolveConfig({ flags = {}, env = process.env, homeDir = userHome({ env }), requireProject = true, searched = [] } = {}) {
+  const configFile = path.join(configDir(homeDir, env), 'config.json');
   const file = readConfigFile(configFile);
   const out = { sources: {}, configFile };
 
@@ -86,7 +120,7 @@ export function resolveConfig({ flags = {}, env = process.env, homeDir = os.home
   if (!out.project) {
     if (requireProject) {
       throw new ConfigError('No Google Cloud project is set, so dockeriser does not know where to build or what to check.', {
-        fix: `Run the setup script from the dockeriser folder (it asks which project to use and writes ${configFile}): powershell -ExecutionPolicy Bypass -File setup\\setup.ps1   Or pass --project <id>.`,
+        fix: `Looked in: ${[...new Set([configFile, ...searched])].join(', ')}. Run the setup script from the dockeriser folder (it asks which project to use and writes ${configFile}): powershell -ExecutionPolicy Bypass -File setup\\setup.ps1   Or pass --project <id>, or set DOCKERISER_CONFIG_DIR to the folder that holds config.json.`,
       });
     }
     return out;
@@ -140,7 +174,7 @@ function gcloudAdcPath(env, homeDir, platform) {
  *   `setEnv` is a key path that should be exported as GOOGLE_APPLICATION_CREDENTIALS.
  * @throws {AuthError} GOOGLE_APPLICATION_CREDENTIALS points at a file that does not exist.
  */
-export function resolveCredentials({ env = process.env, homeDir = os.homedir(), platform = process.platform } = {}) {
+export function resolveCredentials({ env = process.env, homeDir = userHome({ env }), platform = process.platform } = {}) {
   const fromEnv = env.GOOGLE_APPLICATION_CREDENTIALS;
   if (fromEnv) {
     if (!fs.existsSync(fromEnv)) {
@@ -150,7 +184,7 @@ export function resolveCredentials({ env = process.env, homeDir = os.homedir(), 
     }
     return { source: 'env', path: fromEnv, type: credentialType(fromEnv) };
   }
-  const key = path.join(configDir(homeDir), 'key.json');
+  const key = path.join(configDir(homeDir, env), 'key.json');
   if (fs.existsSync(key)) return { source: 'dockeriser-key', path: key, type: credentialType(key), setEnv: key };
   const adc = gcloudAdcPath(env, homeDir, platform);
   if (fs.existsSync(adc)) return { source: 'gcloud-adc', path: adc, type: credentialType(adc) };

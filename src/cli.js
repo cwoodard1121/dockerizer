@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { execFileSync as childExec } from 'node:child_process';
-import { applyCredentials, resolveConfig, resolveCredentials, resourceNames } from './config.js';
+import { applyCredentials, homeSearch, resolveConfig, resolveCredentials, resourceNames, userHome } from './config.js';
 import { AuthError, ConfigError, DockeriserError, EXIT, mapGoogleError } from './errors.js';
 import { defaultTag, expandImage } from './image.js';
 import { cleanupTempFiles, packageSource, removeTarball } from './package-source.js';
@@ -165,7 +165,7 @@ export async function run(argv, deps = {}) {
     env = process.env,
     stdout = process.stdout,
     stderr = process.stderr,
-    homeDir = os.homedir(),
+    homeDir = userHome({ env }),
     createClients = realCreateClients,
     sleep = realSleep,
     now = () => new Date(),
@@ -281,7 +281,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
   });
 
   try {
-    const cfg = resolveConfig({ flags, env, homeDir });
+    const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
     gctx = { project: cfg.project, region: cfg.region, serviceAccount: cfg.serviceAccount };
     const timeoutSec = parseTimeout(flags.timeout);
     const cliArgs = parseBuildArgs(flags['build-arg']);
@@ -452,7 +452,7 @@ function registryFactory({ env, homeDir, cfg, createClients, deps }) {
 
 /** Plan + run a deploy (shared by deploy, deploy --build and build --deploy). */
 async function deployWith({ flags, env, homeDir, createClients, deps, out, dir, built = null, rollback = false }) {
-  const cfg = resolveConfig({ flags, env, homeDir });
+  const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
   const plan = planDeploy({ dir, flags, cfg, homeDir, env, built, rollback });
   const ssh = deps.ssh || createSshRunner({ homeDir });
   const result = await executeDeploy({ plan, ssh, getRegistry: registryFactory({ env, homeDir, cfg, createClients, deps }), out, dryRun: flags['dry-run'] });
@@ -502,7 +502,7 @@ async function rollbackCommand(ctx) {
 
 /** `dockeriser logs [dir] [--to <server>] [--name] [--follow]` */
 async function logsCommand({ flags, rest, cwd, env, homeDir, deps, out }) {
-  const cfg = resolveConfig({ flags, env, homeDir, requireProject: false });
+  const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir, requireProject: false });
   const plan = planDeploy({ dir: rest[0] || cwd, flags, cfg: { project: cfg.project || 'unset', region: cfg.region, repo: cfg.repo }, homeDir, env, rollback: true });
   const ssh = deps.ssh || createSshRunner({ homeDir });
   const tail = flags.tail ? Number(flags.tail) : 100;
@@ -527,14 +527,14 @@ async function serverCommand({ flags, rest, env, homeDir, tmpDir, deps, out }) {
   if (!name) throw new ConfigError(`Missing server name.`, { fix: `dockeriser server ${sub} <name>` });
   if (sub === 'add') {
     const needsGoogle = flags.transfer === 'pull';
-    const cfg = resolveConfig({ flags, env, homeDir, requireProject: needsGoogle });
+    const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir, requireProject: needsGoogle });
     const res = await addServer({ name, flags, homeDir, env, cfg, ssh, gcloud: deps.gcloud || createGcloudRunner({ env }), out, tmpDir });
     if (flags.json) out.result({ ok: res.check.ok, exitCode: res.check.ok ? 0 : 1, ...res });
     else printChecks(res.check.checks, out);
     return res.check.ok ? EXIT.OK : EXIT.BUILD_FAILED;
   }
   if (sub === 'check') {
-    const cfg = resolveConfig({ flags, env, homeDir, requireProject: false });
+    const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir, requireProject: false });
     const server = resolveServer(name, { homeDir, env, flags: { key: flags.key, port: flags.port } });
     const res = await checkServer({ server, ssh, out, cfg });
     if (flags.json) out.result({ ok: res.ok, exitCode: res.ok ? 0 : 1, server: name, checks: res.checks });
@@ -615,7 +615,7 @@ async function doctorCommand({ flags, out, env, homeDir, createClients }) {
 
 /** `dockeriser usage [--month YYYY-MM]` */
 async function usageCommand({ flags, out, env, homeDir, now, createClients }) {
-  const cfg = resolveConfig({ flags, env, homeDir });
+  const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
   let range;
   try {
     range = monthRange(flags.month, now);
@@ -661,7 +661,7 @@ async function usageCommand({ flags, out, env, homeDir, now, createClients }) {
 
 /** `dockeriser status [--offline]` */
 async function statusCommand({ flags, out, env, homeDir, now, createClients }) {
-  const status = getOfflineStatus({ env, homeDir, now, flags });
+  const status = getOfflineStatus({ env, homeDir, now, flags, searched: homeSearch({ env }) });
   const steps = nextSteps(status);
   let live = null;
   if (!flags.offline && status.ready) {
@@ -672,7 +672,7 @@ async function statusCommand({ flags, out, env, homeDir, now, createClients }) {
   if (flags.json) {
     out.result(result);
   } else {
-    out.info(`configured:   ${status.configured ? `yes (project ${status.project}, region ${status.region})` : 'no'}`);
+    out.info(`configured:   ${status.configured ? `yes (project ${status.project}, region ${status.region}, ${status.configFile})` : `no (looked in: ${status.searched.join(', ')})`}`);
     out.info(`credentials:  ${status.credentials.present ? `yes (${status.credentials.path})` : 'no'}`);
     out.info(`gcloud:       ${status.gcloud.installed ? 'installed' : 'not found'}`);
     if (live) out.info(`online check: ${live.ok ? 'ok' : live.failed.map((c) => c.name).join(', ') + ' failing (run dockeriser doctor)'}`);

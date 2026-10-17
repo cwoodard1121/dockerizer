@@ -27,7 +27,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_DIR="${USERPROFILE:-$HOME}/.dockeriser"
+# The OS account's real profile, not $HOME/$USERPROFILE (Claude Code accounts point those at an
+# account folder); the CLI looks there too. DOCKERISER_CONFIG_DIR overrides the whole folder.
+REAL_HOME="$(node -p "require('os').userInfo().homedir" 2>/dev/null || true)"
+CONFIG_DIR="${DOCKERISER_CONFIG_DIR:-${REAL_HOME:-${USERPROFILE:-$HOME}}/.dockeriser}"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 KEY_PATH="$CONFIG_DIR/key.json"
 ID_PATTERN='^[a-z][a-z0-9-]{4,28}[a-z0-9]$'
