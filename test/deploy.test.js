@@ -424,3 +424,15 @@ test('per-user deploy settings: rollback and logs reuse them; --save writes dock
   assert.equal(fromFile.server.host, 'root@198.51.100.7');
   assert.deepEqual(fromFile.items.map((i) => i.name), ['other']);
 });
+
+test('deploy results carry durationSec and per-phase timings', async () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', image: 'web' }, cfg: CFG, homeDir: home, env: {} });
+  const ssh = mockSsh({ deployStdout: '@@dk item=0 new="sha256:new"\n@@dk previous=""\n@@dk health=ok\n@@dk result=ok\n' });
+  let clock = 0;
+  const { o } = out();
+  const result = await executeDeploy({ plan, ssh, getRegistry: async () => mockRegistry(), out: o, now: () => (clock += 1000) });
+  assert.equal(typeof result.durationSec, 'number');
+  assert.ok(result.durationSec > 0);
+  for (const k of ['checkSec', 'transferSec', 'uploadSec', 'scriptSec']) assert.equal(typeof result.timings[k], 'number', k);
+});

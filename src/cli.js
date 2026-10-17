@@ -12,7 +12,7 @@ import { AuthError, ConfigError, DockeriserError, EXIT, mapGoogleError } from '.
 import { defaultTag, expandImage } from './image.js';
 import { cleanupTempFiles, packageSource, removeTarball } from './package-source.js';
 import { sourceObjectName, uploadSource } from './upload.js';
-import { buildRequest, buildRequestMulti, cancelBuild, consoleUrl, exitCodeForStatus, parseBuildArgs, parseTimeout, statusName, submitBuild, summarizeBuild, waitForBuild } from './build.js';
+import { buildRequest, buildRequestMulti, cancelBuild, consoleUrl, exitCodeForStatus, imageDuration, parseBuildArgs, parseTimeout, statusName, stepDurations, submitBuild, summarizeBuild, waitForBuild } from './build.js';
 import { LogTailer, sleep as realSleep } from './logs.js';
 import { createOutput, formatBytes, formatDuration } from './output.js';
 import { printDoctor, runDoctor } from './doctor.js';
@@ -23,7 +23,7 @@ import {
   projectUsage, readUsageCache, recordBuild, summaryFromCache, usageLine, writeUsageCache,
 } from './usage.js';
 import { createClients as realCreateClients } from './clients.js';
-import { loadProject, readBuildArgsFile, resolveBuildArgs, selectImages, splitList } from './project.js';
+import { loadProject, readBuildArgsFile, resolveBuildArgs, secretLookingArgs, selectImages, splitList } from './project.js';
 import { executeDeploy, imageFlags, planDeploy, saveDeploySection, streamLogs } from './deploy.js';
 import { createRegistryClient } from './registry.js';
 import { createSshRunner } from './ssh.js';
@@ -332,6 +332,10 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
       pkgOpts = { images: specs, include: project.include, source: project.source };
     }
     const allRefs = specs.flatMap((s) => s.refs);
+    for (const s of specs) {
+      const secretish = secretLookingArgs(s.buildArgs || []);
+      if (secretish.length) out.warn(`Image "${s.name}": build args ${secretish.join(', ')} look like secrets; build args are visible in the Cloud Build console and the image history. Use a runtime env file for secrets.`);
+    }
 
     if (!flags['dry-run']) requireCredentials(env, homeDir, cfg);
 
@@ -409,10 +413,13 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
     const summary = summarizeBuild(build, {
       project: cfg.project, region: cfg.region, logFile, tail: tailer.tail(50), refs: allRefs, fallbackDurationSec: (Date.now() - started) / 1000,
     });
-    // Label each pushed image with its dockeriser.json name.
+    // Label each pushed image with its dockeriser.json name and the seconds its steps took.
+    const durations = stepDurations(build);
     for (const img of summary.images) {
       const spec = specs.find((s) => s.refs.includes(img.name));
       if (spec && !spec.single) img.image = spec.name;
+      const sec = spec ? imageDuration(durations, spec.single ? null : spec.name) : null;
+      if (sec !== null) img.durationSec = sec;
     }
     if (summary.status === 'SUCCESS') fs.rmSync(logFile, { force: true });
     const exitCode = state.interrupted ? EXIT.INTERRUPTED : exitCodeForStatus(summary.status);

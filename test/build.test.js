@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  stepDurations, imageDuration,
   buildRequest, consoleUrl, exitCodeForStatus, failureInfo, findFailedStep, parseBuildArgs, parseTimeout,
   statusName, submitBuild, summarizeBuild, waitForBuild,
 } from '../src/build.js';
@@ -144,4 +145,13 @@ test('summary of a successful build lists digests and no failure fields', () => 
   assert.equal(s.failedStep, null);
   assert.equal(s.failureInfo, null);
   assert.deepEqual(s.errorTail, []);
+});
+
+test('stepDurations: seconds per step id, from the step timings', () => {
+  const t = (a, b) => ({ startTime: ts(a), endTime: ts(b) });
+  const build = { steps: [{ id: 'pull-cache-web', timing: t('2026-10-16T10:00:00Z', '2026-10-16T10:00:05Z') }, { id: 'build-web', timing: t('2026-10-16T10:00:05Z', '2026-10-16T10:02:00Z') }, { id: 'build-x' }] };
+  assert.deepEqual(stepDurations(build), { 'pull-cache-web': 5, 'build-web': 115 });
+  assert.equal(imageDuration(stepDurations(build), 'web'), 120);
+  assert.equal(imageDuration({ 'pull-cache': 3, build: 40 }, null), 43, 'single-image build steps');
+  assert.equal(imageDuration({}, 'web'), null);
 });

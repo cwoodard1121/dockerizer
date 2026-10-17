@@ -163,6 +163,20 @@ export function resolveBuildArgs(img, { root, env, builtins = {}, cliFileArgs = 
   return [...merged].map(([k, v]) => `${k}=${v}`);
 }
 
+/** Prefixes of values that frameworks bake into client bundles on purpose (public by design). */
+const PUBLIC_PREFIXES = ['NEXT_PUBLIC_*', 'VITE_*', 'PUBLIC_*', 'EXPO_PUBLIC_*', 'REACT_APP_*', 'NUXT_PUBLIC_*'];
+const SECRET_NAME = /SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|API_?KEY|ACCESS_?KEY|(?:^|_)KEY$/i;
+
+/**
+ * Build-arg names that look like secrets. Build args show in the Cloud Build console and the
+ * image history, so these deserve a warning (never a refusal: the heuristic can be wrong).
+ * @param {string[]} kvs KEY=VALUE (or KEY) strings.
+ * @returns {string[]}
+ */
+export function secretLookingArgs(kvs) {
+  return kvs.map((kv) => kv.split('=')[0]).filter((k) => SECRET_NAME.test(k) && !nameMatches(k, PUBLIC_PREFIXES));
+}
+
 /**
  * Validate and normalise the `images` list.
  * @param {unknown} images

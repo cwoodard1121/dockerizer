@@ -285,6 +285,17 @@ const gb = (kb) => (kb ? `${(Number(kb) / 1024 / 1024).toFixed(1)} GB free` : 'u
  */
 export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = false, now = () => Date.now() }) {
   const { server, mode, transfer, items, rollback } = plan;
+  const t0 = now();
+  const secs = (ms) => Math.round(ms / 100) / 10;
+  const timings = { checkSec: 0, transferSec: 0, uploadSec: 0, scriptSec: 0 };
+  const timed = async (key, fn) => {
+    const t = now();
+    try {
+      return await fn();
+    } finally {
+      timings[key] = secs(now() - t);
+    }
+  };
   const result = {
     status: 'SUCCESS',
     exitCode: 0,
@@ -304,6 +315,12 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
     diskFreeBefore: null,
     diskFreeAfter: null,
     then: plan.then ? 'not-run' : null,
+    durationSec: 0,
+    timings,
+  };
+  const done = () => {
+    result.durationSec = secs(now() - t0);
+    return result;
   };
 
   // 1. Exact digests (a build hands them over; otherwise <image>:<tag> is looked up).
@@ -348,14 +365,14 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
   if (dryRun) {
     result.status = 'DRY_RUN';
     result.script = scriptFor(envBase64 ? 'UkVEQUNURUQ=' : null); // env contents are never shown
-    return result;
+    return done();
   }
 
   // 3. Transfer "ssh": skip images the server already has, stream the rest into docker load.
   if (transfer === 'ssh' && !rollback) {
     const registry = await getRegistry();
     out.step(`Checking ${server.host}`);
-    const probe = await runScript({ ssh, server, script: probeScript({ refs: items.map((i) => i.dkRef) }), out, quiet: true });
+    const probe = await timed('checkSec', () => runScript({ ssh, server, script: probeScript({ refs: items.map((i) => i.dkRef) }), out, quiet: true }));
     if (probe.values.docker === 'missing') {
       throw new ConfigError(`Docker is not installed on ${server.host}.`, { fix: `Run: dockeriser server add <name> --host ${server.host} --install-docker   (or on the server: curl -fsSL https://get.docker.com | sh)` });
     }
@@ -386,7 +403,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
       }, { now });
       archive.on('error', (err) => counter.destroy(err));
       const piped = archive.pipe(counter);
-      const res = await ssh.exec(server, loadCommand(), { input: piped, onStdout: (t) => out.log(t.replace(/^(?=.)/gm, '    ')), onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) });
+      const res = await timed('transferSec', () => ssh.exec(server, loadCommand(), { input: piped, onStdout: (t) => out.log(t.replace(/^(?=.)/gm, '    ')), onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) }));
       if (res.code === 255) throw sshError(res, server);
       if (res.code !== 0) throw new DockeriserError(`docker load failed on ${server.host} (exit ${res.code}): ${res.stderr.trim().split('\n').slice(-2).join(' ')}`, { fix: 'Check free disk space on the server (`df -h`), then deploy again.' });
       result.transferredBytes = sent;
@@ -395,7 +412,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
 
   // 4. The deploy script: one SSH session.
   out.step(`${rollback ? 'Rolling back' : 'Deploying'} on ${server.host} (${mode})`);
-  const res = await runScript({ ssh, server, script: scriptFor(envBase64), out });
+  const res = await timed('scriptSec', () => runScript({ ssh, server, script: scriptFor(envBase64), out }));
   const v = res.values;
   if (v.error === 'no-docker') throw new ConfigError(`Docker is not usable on ${server.host}.`, { fix: 'Install it with `dockeriser server add <name> --host <host> --install-docker`.' });
   if (v.error === 'no-previous') throw new ConfigError(`There is no previous image recorded on ${server.host} to roll back to.`);
@@ -413,7 +430,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
   if (res.code === 0 && v.result === 'ok') {
     out.ok(`${rollback ? 'Rolled back' : 'Deployed'} ${items.map((i) => i.label).join(', ')} on ${server.host}${mode === 'run' ? ` (container ${plan.run.name})` : ''}`);
     if (result.diskFreeBefore || result.diskFreeAfter) out.info(`    disk: ${gb(result.diskFreeBefore)} before, ${gb(result.diskFreeAfter)} after`);
-    return result;
+    return done();
   }
   result.exitCode = res.code === 0 ? DEPLOY_FAILED : res.code === 20 ? EXIT.CONFIG : DEPLOY_FAILED;
   result.status = result.rolledBack ? 'ROLLED_BACK' : 'FAILED';
@@ -426,7 +443,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
   } else {
     out.error({ message: `Deploy failed on ${server.host} (exit ${res.code}).`, fix: res.stderr.trim().split('\n').slice(-2).join(' ') || null });
   }
-  return result;
+  return done();
 }
 
 /**

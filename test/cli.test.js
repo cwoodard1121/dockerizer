@@ -292,3 +292,11 @@ test('deploy --save and --no-save together exit 2', async () => {
   assert.equal(await run(['deploy', tempTree({}), '--to', 'root@203.0.113.5', '--image', 'web', '--save', '--no-save', '--json'], d), 2);
   assert.match(JSON.parse(d.stdout.text()).error.message, /--save and --no-save/);
 });
+
+test('build warns about secret-looking build args by name, never by value', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['build', HELLO, '--image', 'hello:v1', '--build-arg', 'API_TOKEN=abc123', '--build-arg', 'NEXT_PUBLIC_URL=x', '--dry-run'], d), 0);
+  assert.match(d.stderr.text(), /build args API_TOKEN look like secrets/);
+  assert.ok(!d.stderr.text().includes('abc123'));
+});
