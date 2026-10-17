@@ -178,3 +178,47 @@ test('ci without a ci section explains ci init', async () => {
   assert.equal(await run(['ci', s.dir, '--json'], d), 2);
   assert.match(json(d).error.fix, /ci init/);
 });
+
+test('ci enable lifts a pace stop but never the $5 hard stop', async () => {
+  const pace = setUp({ month: '2026-10', runs: [{ id: 'a', costUsd: 3 }], disabled: { at: 'x', reason: 'on pace for $5.81' } });
+  const d = deps(pace, fakeGcloud(pace.gcs, []).gcloud);
+  assert.equal(await run(['ci', 'enable', '--json'], d), 0, d.stderr.text());
+  const ledger = JSON.parse(pace.gcs.get(LOGS, 'ci/ledger-2026-10.json'));
+  assert.equal(ledger.override, true);
+  assert.equal(ledger.disabled, null);
+
+  const hard = setUp({ month: '2026-10', runs: [{ id: 'a', costUsd: 5.5 }], disabled: { at: 'x', reason: '$5.50 spent' } });
+  const h = deps(hard, fakeGcloud(hard.gcs, []).gcloud);
+  assert.equal(await run(['ci', 'enable', '--json'], h), 2);
+  assert.match(json(h).error.message, /hard stop has no override/);
+  assert.equal(JSON.parse(hard.gcs.get(LOGS, 'ci/ledger-2026-10.json')).override, false);
+});
+
+test('ci status shows the spend, on/off and live VMs', async () => {
+  const s = setUp({ month: '2026-10', runs: [{ id: 'a', costUsd: 0.25, status: 'SUCCESS' }] });
+  const g = fakeGcloud(s.gcs, []);
+  const list = g.gcloud;
+  const d = deps(s, (args) => (args[2] === 'list' ? { code: 0, stdout: JSON.stringify([{ name: 'dockeriser-ci-x', zone: 'zones/z-a', status: 'RUNNING', creationTimestamp: '2026-10-16T09:59:00Z', labels: { 'dockeriser-ci': '1', 'max-run': '4500' } }]), stderr: '' } : list(args)));
+  assert.equal(await run(['ci', 'status', '--json'], d), 0, d.stderr.text());
+  const res = json(d);
+  assert.equal(res.on, true);
+  assert.equal(res.line, 'CI: $0.25 / $5.00 this month (1 run)');
+  assert.deepEqual(res.vms.map((v) => [v.name, v.zone]), [['dockeriser-ci-x', 'z-a']]);
+});
+
+test('ci cleanup leaves a live gate alone; --force deletes it', async () => {
+  const s = setUp();
+  const vm = { name: 'dockeriser-ci-live', zone: 'zones/z-a', status: 'RUNNING', creationTimestamp: '2026-10-16T09:59:00Z', labels: { 'dockeriser-ci': '1', 'max-run': '4500' } };
+  const deleted = [];
+  const gcloud = (args) => {
+    if (args[2] === 'list') return { code: 0, stdout: JSON.stringify([vm]), stderr: '' };
+    if (args[2] === 'delete') deleted.push(args[3]);
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const d = deps(s, gcloud);
+  assert.equal(await run(['ci', 'cleanup', '--json'], d), 0);
+  assert.deepEqual(json(d), { ok: true, deleted: [], running: ['dockeriser-ci-live'] });
+  const f = deps(s, gcloud);
+  assert.equal(await run(['ci', 'cleanup', '--force', '--json'], f), 0);
+  assert.deepEqual(deleted, ['dockeriser-ci-live']);
+});
