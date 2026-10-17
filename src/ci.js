@@ -232,14 +232,10 @@ async function oneRun({ cfg, ci, names, srcObject, scriptFor, argsFor, zones, ma
     removeSigint();
   }
   const endedAt = clock();
-  const del = deleteVm({ gcloud, project: cfg.project, name, zone, wait: false });
+  out.info(`    deleting ${name}…`);
+  const del = deleteVm({ gcloud, project: cfg.project, name, zone });
   if (!del.ok) out.warn(`could not delete ${name}: ${del.error}. The next dockeriser ci run deletes it, or: dockeriser ci cleanup --force`);
-  let deleted = del.ok ? 'requested' : 'failed';
-  if (del.ok) {
-    await sleep(10000);
-    const s = vmStatus({ gcloud, project: cfg.project, name, zone });
-    if (s === 'GONE') deleted = 'done';
-  }
+  const deleted = del.ok ? 'done' : 'failed';
 
   if (result) status = result.exitCode === 0 ? 'SUCCESS' : result.exitCode === 124 ? 'TIMEOUT' : 'FAILURE';
   const text = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
@@ -282,7 +278,7 @@ async function record({ res, storage, names, month, clock, homeDir, env, out, ro
 
 function printResult(out, r, estimate) {
   out.info();
-  const vm = r.vm.deleted === 'done' ? 'VM deleted' : r.vm.deleted === 'requested' ? 'VM deletion requested' : `VM ${r.vm.name} NOT deleted`;
+  const vm = r.vm.deleted === 'done' ? 'VM deleted' : `VM ${r.vm.name} NOT deleted`;
   const cost = `≈ ${money(r.costUsd)}${estimate}`;
   if (r.status === 'SUCCESS') {
     out.ok(`CI passed in ${formatDuration(r.durationSec)} (${r.steps.length} steps) · ${cost} · ${vm}`);
@@ -386,7 +382,7 @@ async function cleanupSub({ flags, env, homeDir, deps, out }) {
   let deleted = [];
   if (flags.force) {
     for (const vm of vms) {
-      const res = deleteVm({ gcloud, project: cfg.project, name: vm.name, zone: vm.zone, wait: false });
+      const res = deleteVm({ gcloud, project: cfg.project, name: vm.name, zone: vm.zone });
       if (res.ok) deleted.push(vm.name);
       else out.warn(`could not delete ${vm.name}: ${res.error}`);
     }

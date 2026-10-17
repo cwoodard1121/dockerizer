@@ -246,12 +246,12 @@ export function vmStatus({ gcloud, project, name, zone }) {
 }
 
 /**
- * Delete the VM; a VM that is already gone counts as deleted. With `wait: false` the delete is
- * only requested (gcloud --async), which returns in seconds.
+ * Delete the VM and wait for it (about 20 s); a VM that is already gone counts as deleted.
+ * (gcloud 589's `instances delete` has no --async.)
  * @returns {{ok: boolean, error?: string}}
  */
-export function deleteVm({ gcloud, project, name, zone, wait = true }) {
-  const res = gcloud(['compute', 'instances', 'delete', name, `--project=${project}`, `--zone=${zone}`, '--quiet', ...(wait ? [] : ['--async'])]);
+export function deleteVm({ gcloud, project, name, zone }) {
+  const res = gcloud(['compute', 'instances', 'delete', name, `--project=${project}`, `--zone=${zone}`, '--quiet']);
   if (res.code === 0 || /not found|was not found|notFound/i.test(res.stderr)) return { ok: true };
   return { ok: false, error: lastLines(res.stderr) };
 }
@@ -292,7 +292,7 @@ export function sweep({ gcloud, project, now, vms, warn = () => {} }) {
       live.push(vm);
       continue;
     }
-    const res = deleteVm({ gcloud, project, name: vm.name, zone: vm.zone, wait: false });
+    const res = deleteVm({ gcloud, project, name: vm.name, zone: vm.zone });
     if (res.ok) deleted.push(vm.name);
     else warn(`could not delete leftover CI VM ${vm.name}: ${res.error}`);
   }

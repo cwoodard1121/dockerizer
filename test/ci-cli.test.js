@@ -53,6 +53,7 @@ function fakeGcloud(gcs, logs) {
       return !s || s === 'GONE' ? { code: 1, stdout: '', stderr: `ERROR: The resource 'projects/demo-proj/zones/z/instances/${name}' was not found` } : { code: 0, stdout: `${s}\n`, stderr: '' };
     }
     if (verb === 'delete') {
+      if (args.includes('--async')) return { code: 2, stdout: '', stderr: 'ERROR: (gcloud.compute.instances.delete) unrecognized arguments: --async' };
       vms.set(name, 'GONE');
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -82,7 +83,9 @@ test('ci: a passing gate deletes the VM and records the run', async () => {
   assert.equal(code, 0, d.stderr.text());
   assert.equal(res.status, 'SUCCESS');
   assert.deepEqual(res.steps.map((x) => [x.command, x.exitCode, x.durationSec]), [['npm ci', 0, 30], ['npm test', 0, 12]]);
-  assert.deepEqual(g.verbs(), ['list', 'create', 'delete', 'describe']);
+  assert.deepEqual(g.verbs(), ['list', 'create', 'delete']);
+  const del = g.calls.find((a) => a[2] === 'delete');
+  assert.deepEqual(del.slice(4), ['--project=demo-proj', `--zone=${res.vm.zone}`, '--quiet']); // gcloud 589 has no --async here
   assert.equal(res.vm.deleted, 'done');
   assert.ok(res.costUsd > 0 && res.costUsd < 0.05, String(res.costUsd));
   assert.ok(Math.abs(res.costUsd - (res.durationSec / 3600) * 0.0392164) < 1e-5);
