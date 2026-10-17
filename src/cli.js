@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { execFileSync as childExec } from 'node:child_process';
+import { execFileSync as childExec, spawn } from 'node:child_process';
 import { applyCredentials, homeSearch, resolveConfig, resolveCredentials, resourceNames, userHome } from './config.js';
 import { AuthError, ConfigError, DockeriserError, EXIT, mapGoogleError } from './errors.js';
 import { defaultTag, expandImage } from './image.js';
@@ -301,6 +301,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
     const project = flags.image ? null : loadProject(dir);
     let specs;
     let pkgOpts;
+    let prebuilds = [];
     if (flags.image) {
       const image = expandImage({ image: flags.image, extraTags: flags.tag, project: cfg.project, region: cfg.region, repo: cfg.repo, fallbackTag });
       specs = [{ name: image.repository.split('/').pop(), repository: image.repository, refs: image.refs, push: true, single: true }];
@@ -318,6 +319,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
         }
       });
       if (added.length) out.info(`    also building ${added.join(', ')} (needed as a local base)`);
+      prebuilds = selected.filter((img) => img.prebuild);
       const tag = flags.tag?.length ? null : fallbackTag();
       const builtins = gitBuiltins(project.root);
       specs = selected.map((img) => {
@@ -338,6 +340,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
     }
 
     if (!flags['dry-run']) requireCredentials(env, homeDir, cfg);
+    for (const img of prebuilds) await runPrebuild({ img, root: project.root, env, out });
 
     out.step(`Packaging ${path.resolve(dir)}${specs.length > 1 ? ` (${specs.map((s) => s.name).join(', ')})` : ''}`);
     const pkg = await packageSource(dir, { ...pkgOpts, tmpDir, warn: out.warn });
@@ -442,6 +445,25 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
   } finally {
     removeSigint();
   }
+}
+
+/**
+ * Run an image's "prebuild" command on this PC (platform shell, project folder), streaming its
+ * output to stderr. Runs on --dry-run too: the context it stages has to exist to be packaged.
+ */
+function runPrebuild({ img, root, env, out }) {
+  out.info(`    prebuild ${img.name}: ${img.prebuild}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(img.prebuild, { cwd: root, env, shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const relay = (d) => out.log(String(d).replace(/^(?=.)/gm, '      '));
+    child.stdout.on('data', relay);
+    child.stderr.on('data', relay);
+    child.on('error', (err) => reject(new ConfigError(`prebuild for image "${img.name}" could not start: ${err.message}`)));
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new ConfigError(`prebuild for image "${img.name}" failed (exit ${code}): ${img.prebuild}`, { fix: 'Run the command yourself in the project folder, fix it, then build again.' }));
+    });
+  });
 }
 
 /** Lazily create the registry client (needs Google credentials). */

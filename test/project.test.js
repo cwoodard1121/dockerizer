@@ -157,3 +157,10 @@ test('init: finds compose services, Dockerfiles, public build args and a docker 
 test('secret-looking build-arg names are flagged; public client prefixes are not', () => {
   assert.deepEqual(secretLookingArgs(['API_TOKEN=x', 'NEXT_PUBLIC_KEY=y', 'DB_PASSWORD=z', 'REVISION=1', 'STRIPE_SECRET_KEY=s', 'VITE_API_KEY=v', 'AWS_ACCESS_KEY_ID=a', 'SIGNING_KEY']), ['API_TOKEN', 'DB_PASSWORD', 'STRIPE_SECRET_KEY', 'AWS_ACCESS_KEY_ID', 'SIGNING_KEY']);
 });
+
+test('"prebuild" must be a non-empty command string', () => {
+  const root = tempTree({ Dockerfile: 'FROM alpine\n' });
+  assert.equal(normaliseImages([{ name: 'a', prebuild: 'npm run stage' }], root)[0].prebuild, 'npm run stage');
+  assert.equal(normaliseImages([{ name: 'a' }], root)[0].prebuild, null);
+  assert.throws(() => normaliseImages([{ name: 'a', prebuild: ['x'] }], root), /"prebuild" must be a command/);
+});

@@ -6,7 +6,8 @@
  *   "include": [".local/deploy/app-context"],            // uploaded even if an ignore file drops them
  *   "images": [{ "name": "base", "image": "appraiseme-app-base", "dockerfile": "Dockerfile",
  *                "context": ".", "buildArgs": {"REVISION": "${REVISION}"}, "buildArgsFile": ".local/web.env",
- *                "localTag": "appraiseme-app:base", "push": true }],
+ *                "localTag": "appraiseme-app:base", "push": true,
+ *                "prebuild": "node scripts/stage.mjs" }],             // run on this PC before packaging
  *   "deploy": { "server": "prod", "mode": "run|compose|pull", ... }
  * }
  */
@@ -240,7 +241,11 @@ export function normaliseImages(images, root) {
       }
       pushedRepos.set(image, name);
     }
-    return { name, image, dockerfile, context, external, buildArgs, buildArgsFile, buildArgsFromEnv, localTag, push };
+    if (raw.prebuild !== undefined && (typeof raw.prebuild !== 'string' || !raw.prebuild.trim())) {
+      throw new ConfigError(`${where}: "prebuild" must be a command string, e.g. "node scripts/stage-context.mjs".`);
+    }
+    const prebuild = raw.prebuild ? raw.prebuild.trim() : null;
+    return { name, image, dockerfile, context, external, buildArgs, buildArgsFile, buildArgsFromEnv, localTag, push, prebuild };
   });
 }
 

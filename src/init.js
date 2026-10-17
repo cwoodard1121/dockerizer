@@ -201,7 +201,7 @@ export function suggestConfig(root) {
       const dep = images.find((o) => o !== img && (o.image === repoName(ref) || ref.startsWith(`${o.image}:`)));
       if (dep && !ref.includes('/')) {
         dep.localTag = ref;
-        notes.push(`image "${img.name}" builds FROM ${ref}; "${dep.name}" now gets "localTag": "${ref}" and must come first.`);
+        notes.push(`image "${img.name}" builds FROM ${ref}; "${dep.name}" now gets "localTag": "${ref}" and must come first. Both build in the same Cloud Build run, so that FROM works unchanged. If a script stages a context folder first, put that command in the image's "prebuild".`);
       }
     }
   }
