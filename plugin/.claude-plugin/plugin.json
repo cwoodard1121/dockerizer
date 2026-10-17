@@ -1,6 +1,6 @@
 {
   "name": "dockeriser",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Build Docker images on Google Cloud Build instead of local docker build: packages a folder, streams the build log, pushes to Artifact Registry, and tracks free build-minutes. Multi-image builds, deploys over SSH (run, compose, load-only) with rollback, heavy test gates on per-run spot VMs with a monthly spend cap (ci), and slash commands for init, build, ci, deploy, server, rollback, logs, cleanup, setup, doctor, status, usage and login, plus a session-start status note.",
   "author": {
     "name": "cwoodard1121"

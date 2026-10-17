@@ -102,7 +102,7 @@ The build already pushed the image; nothing is pulled to this PC. Its address is
 ## 5. Heavy test gates go to a VM too
 
 A long gate (full `npm run check`, integration, Playwright e2e) eats this PC's memory for a long time.
-When the project's dockeriser.json has a `"ci"` section, run `CLI ci <dir> --json` instead: it runs the
+Run gates locally by default. When the project's dockeriser.json has a `"ci"` section **and** this PC is short on memory (under about 6 GB free) or another stack already holds the gate's ports, run `CLI ci <dir> --json` instead: it runs the
 steps on a fresh spot VM and deletes it, about 3 cents a run, without using the free build minutes.
 `/dockeriser:ci` has the details. Exit 5 means CI is off for the month (the spend cap): run the gate
 locally and never run `ci enable`, which is the owner's override.

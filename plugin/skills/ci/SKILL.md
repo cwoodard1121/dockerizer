@@ -14,6 +14,20 @@ never leave), starts an e2e-capable spot VM (4 vCPU, 16 GB, Docker + Compose + t
 runs the `"ci"` steps of `<dir>/dockeriser.json` in order, streams the log, deletes the VM and records
 the cost (about 3 cents for a 45-minute gate). It never uses the free Cloud Build minutes.
 
+## When to use it (and when not)
+
+Run the gate **locally by default**. Use `CLI ci` only when one of these is true:
+
+- **Memory is tight**: this PC has less than about 6 GB free (PowerShell:
+  `[math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB,1)` gives GB free),
+  or other agents are already running builds or test stacks here.
+- **The gate's ports are taken**: another stack (another agent's dev services, compose project or e2e
+  run) already holds the ports the gate binds, e.g. Postgres, Redis, the API or the web server. Check with
+  `Get-NetTCPConnection -State Listen` or `docker ps`. Two stacks on one PC collide, and the gate's
+  teardown (`docker compose down --volumes`) can wipe the other one's data.
+
+Otherwise run it locally: it is free and needs no upload.
+
 ## 1. Set the project up (once)
 
 If `<dir>/dockeriser.json` has no `"ci"` section, run `CLI ci init <dir> --dry-run` and read the
@@ -58,7 +72,7 @@ failure. Report the gate in a PR as: `dockeriser ci → <status> (<steps passed>
 ## Rules
 
 - **Never run `CLI ci enable`.** It is the owner's override and only the owner runs it. The $5/month
-  cap and the day-7 pace check are deliberate: when CI is off, fall back to the local gate.
+  cap, the day-7 pace check and the runaway stop (a pace past $15 once $1 is spent) are deliberate: when CI is off, fall back to the local gate.
 - Use `ci` for the long gates, not for a single quick test.
 - `CLI ci status --json` shows this month's spend, whether CI is on, the last runs and any live CI VMs.
 - A run that was interrupted leaves no VM for long: the next run deletes leftovers. `CLI ci cleanup`

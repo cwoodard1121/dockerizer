@@ -70,3 +70,12 @@ test('summary line, cache round trip', () => {
   assert.equal(summaryFromCiCache(readCiCache(home, env), now).line, on.line);
   assert.equal(summaryFromCiCache(readCiCache(home, env), new Date('2026-11-01T00:00:00Z')), null);
 });
+
+test('a runaway pace turns CI off before day 7', () => {
+  const day2 = new Date('2026-10-02T12:00:00Z');
+  assert.equal(evaluateCap(ledgerWith(0.5), day2).ok, true); // under $1: too early to judge
+  const res = evaluateCap(ledgerWith(1.2), day2); // 1.2 x 31 / 2 = 18.60 > 15
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /runaway pace: \$18\.60/);
+  assert.equal(evaluateCap(ledgerWith(0.9), new Date('2026-10-03T00:00:00Z')).ok, true);
+});
