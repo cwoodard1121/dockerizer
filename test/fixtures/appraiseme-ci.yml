@@ -1,0 +1,82 @@
+name: CI
+
+# The gates AGENTS.md asks for before a merge, run on a clean checkout: `check`
+# is `npm run check`; `stack` brings up the compose dependencies, checks the
+# generated database types against the migrated schema, and runs the
+# integration project and both Playwright suites against them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A private repository pays for hosted runner minutes, and the workflows this
+# replaces were removed on 2026-09-17 with the allowance spent. A newer push to
+# the same branch makes the run for the older one worthless, so it is cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: npm run check
+    # Set the repository variable CI_RUNNER to a self-hosted runner's label to
+    # run without spending hosted minutes (docs/e2e-testing.md, "CI").
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  stack:
+    name: integration + e2e
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Start Postgres, GoTrue, Redis and Mailpit
+        run: npm run dev:services
+      # db:types:check reads appraiseme_test, which dev:services does not
+      # create: the reset migrates it to the head of supabase/migrations, and
+      # the check fails if types.generated.ts is not what `npm run db:types`
+      # writes from it (stale after a migration, or edited by hand).
+      - run: npm run db:reset:test
+      - run: npm run db:types:check
+      - run: npm run test:integration
+      - run: npx playwright install --with-deps chromium
+      # CI=true (set by the runner) makes playwright.config.ts build and serve
+      # the production web app, retry once and keep a video of a failure. One
+      # invocation runs setup, the API suite and the browser suite, so the web
+      # app is built once.
+      - run: npm run test:e2e
+      - name: Capture stack diagnostics
+        if: failure()
+        run: |
+          mkdir -p test-results/e2e
+          docker compose -f infra/compose/dependencies.yml ps > test-results/e2e/services.txt
+          docker compose -f infra/compose/dependencies.yml logs --no-color > test-results/e2e/services.log
+      - name: Upload the Playwright report and traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence
+          path: |
+            playwright-report/
+            test-results/e2e/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Stop the disposable services
+        if: always()
+        run: docker compose -f infra/compose/dependencies.yml down --volumes
