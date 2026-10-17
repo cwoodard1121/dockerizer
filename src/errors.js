@@ -9,6 +9,7 @@ export const EXIT = Object.freeze({
   CONFIG: 2,
   AUTH: 3,
   UPLOAD: 4,
+  CI_OFF: 5,
   INTERRUPTED: 130,
 });
 

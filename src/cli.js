@@ -31,6 +31,7 @@ import { addServer, checkServer, createGcloudRunner, printChecks } from './serve
 import { listServers, removeServer, resolveServer } from './servers.js';
 import { runInit } from './init.js';
 import { DEFAULT_KEEP, runCleanup } from './cleanup.js';
+import { ciCommand } from './ci.js';
 
 const VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -46,6 +47,8 @@ Usage:
   dockeriser server list | check <name> | remove <name>
   dockeriser init [dir] [--force]                           write a starter dockeriser.json for a project
   dockeriser cleanup [--keep 20] [--dry-run]                keep the newest N versions of each image, delete the rest
+  dockeriser ci [dir]                                       run dockeriser.json's "ci" steps on a fresh spot VM (≈3¢ a run)
+  dockeriser ci init [dir] [--force] | ci status | ci cleanup [--force]
   dockeriser login                       say what (if anything) is left to sign in
   dockeriser usage [--month YYYY-MM]     free build-minutes used this month, projection, cost
   dockeriser status --offline            instant local check (no network): set up? credentials? usage
@@ -98,9 +101,12 @@ first deploy saves in ~/.dockeriser/projects/):
 Server options: --host, --port, --key (default: "sshKey" in ~/.dockeriser/config.json), --transfer, --install-docker
 Logs options: --follow, --tail <n> (default 100)
 Cleanup options: --keep <n> (default 20), --dry-run (show what would go; change nothing)
+CI options: --machine e2-standard-8 (default ci.machine or e2-standard-4), --zone <zone>, --timeout 90m (default ci.timeout
+            or 60m), --no-retry (do not retry once after a spot preemption), --dry-run (print the VM and its script)
+            CI turns itself off for the month past $5 of estimated spend, or from day 7 on a pace past $5.
 
 Exit codes: 0 success, 1 build or deploy failed, 2 config/input error, 3 credentials/permission error,
-            4 upload error, 130 interrupted (build cancelled).`;
+            4 upload error, 5 CI is off this month (spend cap), 130 interrupted (build cancelled).`;
 
 const OPTIONS = {
   image: { type: 'string', short: 'i', multiple: true },
@@ -109,7 +115,7 @@ const OPTIONS = {
   'build-arg': { type: 'string', multiple: true },
   'build-arg-file': { type: 'string' },
   only: { type: 'string', multiple: true },
-  timeout: { type: 'string', default: '20m' },
+  timeout: { type: 'string' },
   'no-cache': { type: 'boolean', default: false },
   sequential: { type: 'boolean', default: false },
   'dry-run': { type: 'boolean', default: false },
@@ -152,6 +158,10 @@ const OPTIONS = {
   force: { type: 'boolean', default: false },
   // cleanup
   keep: { type: 'string' },
+  // ci
+  machine: { type: 'string' },
+  zone: { type: 'string' },
+  'no-retry': { type: 'boolean', default: false },
 };
 
 /** Default process hooks for SIGINT; tests replace this. */
@@ -229,6 +239,7 @@ export async function run(argv, deps = {}) {
     server: serverCommand,
     init: initCommand,
     cleanup: cleanupCommand,
+    ci: ciCommand,
   };
   if (handlers[command]) {
     const out = createOutput({ json: flags.json || (flags['dry-run'] && (command === 'deploy' || command === 'rollback')), stdout, stderr, env });
@@ -240,7 +251,7 @@ export async function run(argv, deps = {}) {
   }
   if (command !== 'build') {
     const out = createOutput({ json: flags.json, stdout, stderr, env });
-    return fail(out, new ConfigError(`Unknown command "${command}".`, { fix: 'Commands: build, deploy, rollback, logs, server, init, cleanup, login, usage, status, doctor. Run `dockeriser --help`.' }), flags.json);
+    return fail(out, new ConfigError(`Unknown command "${command}".`, { fix: 'Commands: build, ci, deploy, rollback, logs, server, init, cleanup, login, usage, status, doctor. Run `dockeriser --help`.' }), flags.json);
   }
 
   // Dry runs keep stdout for the request JSON only.
@@ -312,7 +323,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
   try {
     const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
     gctx = { project: cfg.project, region: cfg.region, serviceAccount: cfg.serviceAccount };
-    const timeoutSec = parseTimeout(flags.timeout);
+    const timeoutSec = parseTimeout(flags.timeout || '20m');
     const cliArgs = parseBuildArgs(flags['build-arg']);
     const cliFileArgs = flags['build-arg-file'] ? readBuildArgsFile(path.resolve(flags['build-arg-file'])) : [];
     const names = resourceNames(cfg);
