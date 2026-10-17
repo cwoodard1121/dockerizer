@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as tar from 'tar';
-import { loadProject, normaliseImages, resolveBuildArgs, secretLookingArgs, selectImages } from '../src/project.js';
+import { buildGroups, imageDeps, loadProject, normaliseImages, resolveBuildArgs, secretLookingArgs, selectImages } from '../src/project.js';
 import { listUploadFiles, packageSource, removeTarball } from '../src/package-source.js';
 import { dockerMatcher } from '../src/dockerignore.js';
 import { buildRequestMulti } from '../src/build.js';
@@ -163,4 +163,17 @@ test('"prebuild" must be a non-empty command string', () => {
   assert.equal(normaliseImages([{ name: 'a', prebuild: 'npm run stage' }], root)[0].prebuild, 'npm run stage');
   assert.equal(normaliseImages([{ name: 'a' }], root)[0].prebuild, null);
   assert.throws(() => normaliseImages([{ name: 'a', prebuild: ['x'] }], root), /"prebuild" must be a command/);
+});
+
+test('buildGroups: images joined by a local-base FROM stay in one build; the rest build alone', () => {
+  const root = tempTree({
+    Dockerfile: 'FROM node:22\n',
+    'app/Dockerfile': 'FROM app:base\n',
+    'web/Dockerfile': 'FROM node:22\n',
+    'proxy/Dockerfile': 'FROM caddy\n',
+  });
+  const images = normaliseImages([{ name: 'base', localTag: 'app:base' }, { name: 'web', context: 'web' }, { name: 'app', context: 'app' }, { name: 'proxy', context: 'proxy' }], root);
+  const deps = imageDeps(images, (df) => fs.readFileSync(path.join(root, df), 'utf8'));
+  assert.deepEqual(buildGroups(images, deps).map((g) => g.map((i) => i.name)), [['base', 'app'], ['web'], ['proxy']]);
+  assert.deepEqual(buildGroups(images.slice(1), deps).map((g) => g.map((i) => i.name)), [['web'], ['app'], ['proxy']], 'a base that is not selected does not group');
 });

@@ -23,7 +23,7 @@ import {
   projectUsage, readUsageCache, recordBuild, summaryFromCache, usageLine, writeUsageCache,
 } from './usage.js';
 import { createClients as realCreateClients } from './clients.js';
-import { loadProject, readBuildArgsFile, resolveBuildArgs, secretLookingArgs, selectImages, splitList } from './project.js';
+import { buildGroups, imageDeps, loadProject, readBuildArgsFile, resolveBuildArgs, secretLookingArgs, selectImages, splitList } from './project.js';
 import { executeDeploy, imageFlags, planDeploy, saveDeploySection, streamLogs } from './deploy.js';
 import { createRegistryClient } from './registry.js';
 import { createSshRunner } from './ssh.js';
@@ -99,6 +99,7 @@ const OPTIONS = {
   only: { type: 'string', multiple: true },
   timeout: { type: 'string', default: '20m' },
   'no-cache': { type: 'boolean', default: false },
+  sequential: { type: 'boolean', default: false },
   'dry-run': { type: 'boolean', default: false },
   json: { type: 'boolean', default: false },
   project: { type: 'string' },
@@ -270,16 +271,18 @@ function gitBuiltins(dir) {
  * @returns {Promise<{exitCode: number, summary?: object, images?: Array<{name: string, repository: string, digest: string}>, dryRun?: boolean}>}
  */
 async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep, exit, sigint, out, dir }) {
-  const state = { interrupted: false, buildName: null, phase: 'local', cancelPromise: null };
+  // names: every submitted build; Ctrl-C cancels all of them.
+  const state = { interrupted: false, names: [], phase: 'local', cancelPromise: null };
   let gctx = {};
   let clients;
-  const requestCancel = () =>
-    cancelBuild(clients.cloudBuild, state.buildName).catch((err) => {
+  const cancelOne = (name) =>
+    cancelBuild(clients.cloudBuild, name).catch((err) => {
       out.error(mapGoogleError(err, { ...gctx, action: 'cancel the build' }), flags.debug);
       exit(EXIT.INTERRUPTED);
     });
+  const requestCancel = () => Promise.all(state.names.map(cancelOne));
   const removeSigint = sigint(() => {
-    if (state.interrupted || !state.buildName) {
+    if (state.interrupted || !state.names.length) {
       if (state.phase === 'submitting' && !state.interrupted) {
         state.interrupted = true; // cancel as soon as the build id arrives
         out.warn('cancelling build… (press Ctrl-C again to quit without cancelling)');
@@ -290,7 +293,7 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
       return;
     }
     state.interrupted = true;
-    out.warn('cancelling build… (press Ctrl-C again to quit without waiting)');
+    out.warn(`cancelling ${state.names.length > 1 ? `${state.names.length} builds` : 'build'}… (press Ctrl-C again to quit without waiting)`);
     state.cancelPromise = requestCancel();
   });
 
@@ -308,22 +311,25 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
     let specs;
     let pkgOpts;
     let prebuilds = [];
+    let groups;
     if (flags.image) {
       const image = expandImage({ image: flags.image, extraTags: flags.tag, project: cfg.project, region: cfg.region, repo: cfg.repo, fallbackTag });
       specs = [{ name: image.repository.split('/').pop(), repository: image.repository, refs: image.refs, push: true, single: true }];
       pkgOpts = { dockerfile: flags.dockerfile };
       specs[0].buildArgs = [...cliFileArgs, ...cliArgs];
+      groups = [specs];
     } else {
       if (!project.exists || !project.images.length) {
         throw new ConfigError(`No --image given and ${project.file} lists no images.`, { fix: 'Pass --image <name>[:<tag>], or run `dockeriser init` to write a dockeriser.json.' });
       }
-      const { selected, added } = selectImages(project.images, splitList(flags.only), (df) => {
+      const readDockerfile = (df) => {
         try {
           return fs.readFileSync(path.join(project.root, df), 'utf8');
         } catch {
           return '';
         }
-      });
+      };
+      const { selected, added } = selectImages(project.images, splitList(flags.only), readDockerfile);
       if (added.length) out.info(`    also building ${added.join(', ')} (needed as a local base)`);
       prebuilds = selected.filter((img) => img.prebuild);
       const tag = flags.tag?.length ? null : fallbackTag();
@@ -338,38 +344,42 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
         };
       });
       pkgOpts = { images: specs, include: project.include, source: project.source };
+      // Images that share no local base build at the same time, each on its own Cloud Build machine.
+      const parallel = !flags.sequential && project.raw?.parallel !== false;
+      groups = parallel ? buildGroups(specs, imageDeps(project.images, readDockerfile)) : [specs];
     }
-    const allRefs = specs.flatMap((s) => s.refs);
     for (const s of specs) {
       const secretish = secretLookingArgs(s.buildArgs || []);
       if (secretish.length) out.warn(`Image "${s.name}": build args ${secretish.join(', ')} look like secrets; build args are visible in the Cloud Build console and the image history. Use a runtime env file for secrets.`);
     }
+    const many = groups.length > 1;
+    const labelOf = (group) => group.map((s) => s.name).join('+');
 
     if (!flags['dry-run']) requireCredentials(env, homeDir, cfg);
     for (const img of prebuilds) await runPrebuild({ img, root: project.root, env, out });
 
     out.step(`Packaging ${path.resolve(dir)}${specs.length > 1 ? ` (${specs.map((s) => s.name).join(', ')})` : ''}`);
     const pkg = await packageSource(dir, { ...pkgOpts, tmpDir, warn: out.warn });
-    let request;
+    let requests;
     try {
       out.info(`    ${pkg.fileCount} files, ${formatBytes(pkg.bytes)}${pkg.ignoreFile ? ` (using ${pkg.ignoreFile})` : ''}`);
       const object = sourceObjectName(pkg.sha256, now);
-      const requestFor = (src) =>
-        specs[0].single
+      const requestFor = (src, group) =>
+        group[0].single
           ? buildRequest({
               project: cfg.project, region: cfg.region, serviceAccount: cfg.serviceAccount, logsBucket: names.logsBucket, source: src,
-              repository: specs[0].repository, refs: specs[0].refs, dockerfile: pkg.dockerfile, buildArgs: specs[0].buildArgs, noCache: flags['no-cache'], timeoutSec,
+              repository: group[0].repository, refs: group[0].refs, dockerfile: pkg.dockerfile, buildArgs: group[0].buildArgs, noCache: flags['no-cache'], timeoutSec,
             })
           : buildRequestMulti({
               project: cfg.project, region: cfg.region, serviceAccount: cfg.serviceAccount, logsBucket: names.logsBucket, source: src,
-              images: specs, noCache: flags['no-cache'], timeoutSec,
+              images: group, noCache: flags['no-cache'], timeoutSec,
             });
 
       if (flags['dry-run']) {
-        const req = requestFor({ bucket: names.sourceBucket, object });
+        const reqs = groups.map((g) => requestFor({ bucket: names.sourceBucket, object }, g));
         const sourceInfo = { bytes: pkg.bytes, fileCount: pkg.fileCount, sha256: pkg.sha256, ignoreFile: pkg.ignoreFile };
-        if (flags.json) out.result({ status: 'DRY_RUN', exitCode: 0, request: req, source: sourceInfo });
-        else out.result(req);
+        if (flags.json) out.result(many ? { status: 'DRY_RUN', exitCode: 0, parallel: true, builds: groups.map((g) => g.map((s) => s.name)), requests: reqs, source: sourceInfo } : { status: 'DRY_RUN', exitCode: 0, request: reqs[0], source: sourceInfo });
+        else out.result(many ? reqs : reqs[0]);
         return { exitCode: EXIT.OK, dryRun: true };
       }
 
@@ -378,61 +388,78 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
       const source = await uploadSource({
         storage: clients.storage, bucket: names.sourceBucket, object, file: pkg.path, bytes: pkg.bytes, project: cfg.project, serviceAccount: cfg.serviceAccount,
       });
-      request = requestFor(source);
+      requests = groups.map((g) => requestFor(source, g));
     } finally {
       removeTarball(pkg.path);
     }
 
-    out.step(`Starting Cloud Build in ${cfg.region}`);
+    out.step(`Starting Cloud Build in ${cfg.region}${many ? `: ${groups.map(labelOf).join(', ')} in parallel (${groups.length} builds)` : ''}`);
     state.phase = 'submitting';
     const started = Date.now();
-    const submitted = await submitBuild({ cloudBuild: clients.cloudBuild, request, ctx: gctx });
-    state.buildName = submitted.name;
+    const jobs = [];
+    for (const [i, group] of groups.entries()) {
+      if (state.interrupted) break; // Ctrl-C while submitting: start no more
+      const submitted = await submitBuild({ cloudBuild: clients.cloudBuild, request: requests[i], ctx: gctx });
+      state.names.push(submitted.name);
+      jobs.push({ group, submitted, label: labelOf(group) });
+      out.info(`    ${many ? `${labelOf(group)}: ` : ''}build ${submitted.id}`);
+      out.info(`    ${consoleUrl(cfg.region, submitted.id, cfg.project)}`);
+      if (state.interrupted) {
+        out.warn('cancelling build…');
+        state.cancelPromise = requestCancel();
+      }
+    }
     state.phase = 'running';
-    out.info(`    build ${submitted.id}`);
-    out.info(`    ${consoleUrl(cfg.region, submitted.id, cfg.project)}`);
-    if (state.interrupted) {
-      out.warn('cancelling build…');
-      state.cancelPromise = requestCancel();
-    }
 
-    const logFile = path.join(tmpDir, `dockeriser-${submitted.id}.log`);
-    const tailer = new LogTailer({ storage: clients.storage, bucket: names.logsBucket, buildId: submitted.id, onText: out.log, logFile, onWarn: out.warn, sleep }).start();
-
-    let build;
-    try {
-      let lastStatus;
-      build = await waitForBuild({
-        cloudBuild: clients.cloudBuild,
-        name: submitted.name,
-        sleep,
-        ctx: gctx,
-        onUpdate: (b) => {
-          const s = statusName(b.status);
-          if (s !== lastStatus && (s === 'QUEUED' || s === 'PENDING')) out.info(`    ${s.toLowerCase()}… waiting for a worker`);
-          lastStatus = s;
-        },
-      });
-      await tailer.drain();
-    } finally {
-      await tailer.stop();
-    }
+    // Wait for every build, each with its own log tail; several builds' lines carry a [name] prefix.
+    const finished = await Promise.all(
+      jobs.map(async (job) => {
+        const logFile = path.join(tmpDir, `dockeriser-${job.submitted.id}.log`);
+        const lines = many ? prefixLines(`[${job.label}] `, out.log) : null;
+        const tailer = new LogTailer({ storage: clients.storage, bucket: names.logsBucket, buildId: job.submitted.id, onText: lines ? lines.push : out.log, logFile, onWarn: out.warn, sleep }).start();
+        let build;
+        try {
+          let lastStatus;
+          build = await waitForBuild({
+            cloudBuild: clients.cloudBuild,
+            name: job.submitted.name,
+            sleep,
+            ctx: gctx,
+            onUpdate: (b) => {
+              const s = statusName(b.status);
+              if (s !== lastStatus && (s === 'QUEUED' || s === 'PENDING')) out.info(`    ${many ? `${job.label}: ` : ''}${s.toLowerCase()}… waiting for a worker`);
+              lastStatus = s;
+            },
+          });
+          await tailer.drain();
+        } finally {
+          await tailer.stop();
+          lines?.end();
+        }
+        const refs = job.group.flatMap((s) => s.refs);
+        const summary = summarizeBuild(build, {
+          project: cfg.project, region: cfg.region, logFile, tail: tailer.tail(50), refs, fallbackDurationSec: (Date.now() - started) / 1000,
+        });
+        // Label each pushed image with its dockeriser.json name and the seconds its steps took.
+        const durations = stepDurations(build);
+        for (const img of summary.images) {
+          const spec = job.group.find((s) => s.refs.includes(img.name));
+          if (spec && !spec.single) img.image = spec.name;
+          const sec = spec ? imageDuration(durations, spec.single ? null : spec.name) : null;
+          if (sec !== null) img.durationSec = sec;
+        }
+        if (summary.status === 'SUCCESS') fs.rmSync(logFile, { force: true });
+        return { build, summary, id: job.submitted.id };
+      }),
+    );
     await state.cancelPromise;
 
-    const summary = summarizeBuild(build, {
-      project: cfg.project, region: cfg.region, logFile, tail: tailer.tail(50), refs: allRefs, fallbackDurationSec: (Date.now() - started) / 1000,
-    });
-    // Label each pushed image with its dockeriser.json name and the seconds its steps took.
-    const durations = stepDurations(build);
-    for (const img of summary.images) {
-      const spec = specs.find((s) => s.refs.includes(img.name));
-      if (spec && !spec.single) img.image = spec.name;
-      const sec = spec ? imageDuration(durations, spec.single ? null : spec.name) : null;
-      if (sec !== null) img.durationSec = sec;
-    }
-    if (summary.status === 'SUCCESS') fs.rmSync(logFile, { force: true });
+    // Usage after every build has finished, one at a time (one cache file).
+    let usage = null;
+    for (const f of finished) usage = recordUsage({ homeDir, build: f.build, buildId: f.id, project: cfg.project, region: cfg.region, now, warn: out.warn }) || usage;
+    const summary = many ? mergeSummaries(finished.map((f) => f.summary), (Date.now() - started) / 1000) : finished[0].summary;
+    summary.usage = usage;
     const exitCode = state.interrupted ? EXIT.INTERRUPTED : exitCodeForStatus(summary.status);
-    summary.usage = recordUsage({ homeDir, build, buildId: submitted.id, project: cfg.project, region: cfg.region, now, warn: out.warn });
 
     if (!flags.json) {
       if (summary.status === 'SUCCESS') printSuccess(out, summary);
@@ -451,6 +478,42 @@ async function runBuild({ flags, env, homeDir, now, createClients, tmpDir, sleep
   } finally {
     removeSigint();
   }
+}
+
+/**
+ * One result for several parallel builds: the first failed build's details (else the first build's)
+ * at the top level, every image, wall-clock seconds, summed build-minutes, and each build in `builds`.
+ */
+export function mergeSummaries(summaries, wallSec) {
+  const failed = summaries.find((s) => s.status !== 'SUCCESS');
+  const head = failed || summaries[0];
+  return {
+    ...head,
+    status: failed ? failed.status : 'SUCCESS',
+    images: summaries.flatMap((s) => s.images),
+    durationSec: Math.round(wallSec),
+    buildMinutes: Math.round(summaries.reduce((n, s) => n + s.buildMinutes, 0) * 100) / 100,
+    parallel: true,
+    builds: summaries,
+  };
+}
+
+/** Prefix every complete line of streamed text (partial lines wait for their end). */
+function prefixLines(prefix, write) {
+  let buf = '';
+  return {
+    push: (text) => {
+      buf += text;
+      const i = buf.lastIndexOf('\n');
+      if (i < 0) return;
+      write(buf.slice(0, i + 1).replace(/^(?=.)/gm, prefix));
+      buf = buf.slice(i + 1);
+    },
+    end: () => {
+      if (buf) write(`${prefix}${buf}\n`);
+      buf = '';
+    },
+  };
 }
 
 /**
@@ -818,7 +881,16 @@ export function printSuccess(out, s) {
   out.info();
   out.ok(`SUCCESS in ${formatDuration(s.durationSec)} (${s.buildMinutes.toFixed(2)} build-minutes, billed per second)`);
   for (const img of s.images) out.info(`  ${img.name}${img.digest ? `@${img.digest}` : ''}`);
-  out.info(`  ${c('dim', 'console:')} ${s.consoleUrl}`);
+  if (s.builds) printBuilds(out, s.builds);
+  else out.info(`  ${c('dim', 'console:')} ${s.consoleUrl}`);
+}
+
+/** One line per parallel build: images, status, time, console link. */
+function printBuilds(out, builds) {
+  for (const b of builds) {
+    const names = [...new Set(b.images.map((i) => i.image || i.name.split('/').pop().split(':')[0]))].join(', ') || 'no pushed images';
+    out.info(`  build ${b.buildId} (${names}): ${b.status} in ${formatDuration(b.durationSec)}  ${b.consoleUrl}`);
+  }
 }
 
 /** Failure block for humans. */
@@ -841,4 +913,5 @@ export function printFailure(out, s) {
   }
   if (s.logFile) out.info(`  full log:    ${s.logFile}`);
   out.info(`  console:     ${s.consoleUrl}`);
+  if (s.builds) printBuilds(out, s.builds);
 }

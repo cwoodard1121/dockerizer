@@ -279,7 +279,7 @@ test('build refuses a repeated --image; deploy --build --image a --image b build
     'dockeriser.json': JSON.stringify({ images: [{ name: 'a', context: 'a' }, { name: 'b', context: 'b' }, { name: 'c', context: 'c' }] }),
   });
   const d2 = deps({ env, homeDir: home, tmpDir: tempTree({}) });
-  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'b', '--to', 'root@203.0.113.5', '--mode', 'load-only', '--dry-run'], d2), 0);
+  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'b', '--to', 'root@203.0.113.5', '--mode', 'load-only', '--dry-run', '--sequential'], d2), 0);
   const steps = JSON.parse(d2.stdout.text()).request.build.steps.map((s) => s.id);
   assert.deepEqual(steps.filter((s) => s.startsWith('build-')), ['build-a', 'build-b']);
   const d3 = deps({ env, homeDir: home });
