@@ -56,3 +56,56 @@ export function gcsLogStorage(contents) {
 
 /** Protobuf-style timestamp. */
 export const ts = (iso) => ({ seconds: String(Math.floor(Date.parse(iso) / 1000)), nanos: 0 });
+
+/**
+ * Fake Cloud Storage JSON API behind `storage.authClient.request`: object metadata (generation),
+ * media reads (optionally with a Range or a generation) and media uploads with ifGenerationMatch.
+ * `beforeWrite()` runs before each upload is applied (to simulate another writer).
+ */
+export function fakeGcs() {
+  const objects = new Map(); // "bucket/name" -> {data: Buffer, generation: number}
+  let nextGen = 1;
+  const api = {
+    calls: [],
+    beforeWrite: null,
+    put(bucket, name, text) {
+      objects.set(`${bucket}/${name}`, { data: Buffer.from(text), generation: nextGen++ });
+    },
+    get(bucket, name) {
+      return objects.get(`${bucket}/${name}`)?.data.toString();
+    },
+    has(bucket, name) {
+      return objects.has(`${bucket}/${name}`);
+    },
+  };
+  const fail = (status) => Object.assign(new Error(`HTTP ${status}`), { response: { status } });
+  api.storage = {
+    authClient: {
+      request: async ({ url, method = 'GET', headers = {}, data }) => {
+        const u = new URL(url);
+        api.calls.push({ method, url });
+        if (method === 'POST') {
+          const bucket = decodeURIComponent(u.pathname.match(/\/b\/([^/]+)\/o/)[1]);
+          const name = u.searchParams.get('name');
+          api.beforeWrite?.();
+          const cur = objects.get(`${bucket}/${name}`);
+          const want = u.searchParams.get('ifGenerationMatch');
+          if (want !== null && Number(want) !== (cur ? cur.generation : 0)) throw fail(412);
+          const obj = { data: Buffer.from(data), generation: nextGen++ };
+          objects.set(`${bucket}/${name}`, obj);
+          return { status: 200, data: { generation: String(obj.generation) } };
+        }
+        const [, bucket, name] = u.pathname.match(/\/b\/([^/]+)\/o\/(.+)$/);
+        const obj = objects.get(`${decodeURIComponent(bucket)}/${decodeURIComponent(name)}`);
+        if (!obj) throw fail(404);
+        if (u.searchParams.get('alt') !== 'media') return { status: 200, data: { generation: String(obj.generation) } };
+        const gen = u.searchParams.get('generation');
+        if (gen && Number(gen) !== obj.generation) throw fail(404);
+        const start = headers.Range ? Number(headers.Range.match(/bytes=(\d+)-/)[1]) : 0;
+        if (start >= obj.data.length && start > 0) throw fail(416);
+        return { status: headers.Range ? 206 : 200, data: obj.data.subarray(start) };
+      },
+    },
+  };
+  return api;
+}
