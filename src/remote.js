@@ -310,6 +310,45 @@ if bash -c ${shq(then)}; then mark then=ok; else rc=$?; mark then=failed code=$r
 }
 
 /**
+ * Unpack uploaded files (a gzipped tar on stdin) into their folders on the server. Everything is
+ * extracted into a temp folder first, so a broken stream changes nothing; then each upload is copied
+ * into place with $S. `keepEnv` keys keep the server's existing lines of <to>/.env (a release pinning
+ * image names there, say) when the upload brings a new .env: those keys are dropped from the new
+ * file and the old lines appended. Values are never printed, only key names.
+ * @param {{uploads: Array<{rel: string, to: string, isDir: boolean}>, keepEnv?: string[], stateDir?: string}} opts
+ */
+export function uploadScript({ uploads, keepEnv = [], stateDir }) {
+  const keys = keepEnv.join('|');
+  let s = `${prelude({ stateDir, needDocker: false })}# dockeriser upload
+tmp=$(mktemp -d) || exit 30
+trap 'rm -rf "$tmp"' EXIT
+if ! tar -xzf - -C "$tmp" --no-same-owner; then mark upload=failed; echo "the upload stream broke; nothing on the server was changed" >&2; exit 31; fi
+`;
+  uploads.forEach((u, i) => {
+    const src = `"$tmp"/${shq(u.rel)}`;
+    s += `dest=${shq(u.to)}
+$S mkdir -p "$dest" || { mark up=${i} error=mkdir; echo "could not create $dest" >&2; exit 32; }
+`;
+    if (keys && u.isDir) {
+      s += `kept=""
+if [ -f ${src}/.env ] && $S test -f "$dest/.env"; then kept=$($S cat "$dest/.env" | grep -E ${shq(`^(export )?(${keys})=`)} || true); fi
+`;
+    }
+    s += `${u.isDir ? `$S cp -a ${src}/. "$dest/"` : `$S cp -a ${src} "$dest/"`} || { mark up=${i} error=copy; echo "could not copy into $dest" >&2; exit 33; }
+`;
+    if (keys && u.isDir) {
+      s += `if [ -n "$kept" ]; then
+  { $S cat "$dest/.env" | grep -vE ${shq(`^(export )?(${keys})=`)}; printf '%s\\n' "$kept"; } > "$tmp/.env.merged" && $S cp "$tmp/.env.merged" "$dest/.env" || exit 34
+  mark up=${i} kept="$(printf '%s\\n' "$kept" | sed -e 's/^export //' -e 's/=.*//' | tr '\\n' ' ' | sed 's/ $//')"
+fi
+`;
+    }
+    s += `mark up=${i} ok=1\n`;
+  });
+  return `${s}mark upload=ok\n`;
+}
+
+/**
  * Remote command for `dockeriser logs`.
  * @param {{mode: string, name?: string, compose?: {dir: string, file?: string, project?: string}, services?: string[], tail?: number, follow?: boolean}} opts
  */

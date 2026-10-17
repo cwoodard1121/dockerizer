@@ -124,6 +124,8 @@ const OPTIONS = {
   service: { type: 'string', multiple: true },
   'tag-as': { type: 'string', multiple: true },
   then: { type: 'string' },
+  upload: { type: 'string', multiple: true },
+  'keep-env': { type: 'string', multiple: true },
   save: { type: 'boolean', default: false },
   'no-save': { type: 'boolean', default: false },
   follow: { type: 'boolean', default: false },

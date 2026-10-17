@@ -151,3 +151,6 @@ Files: `src/project.js`, `src/cli.js` · Test `test/project.test.js`, `test/cli.
 - [ ] owner's check: an appraiseme agent ships with one `dockeriser deploy`
 
 ## Deviations
+- Task 6: the code was written before its tests (`test/upload.test.js`, a new file rather than
+  `test/deploy.test.js`); the tests then passed first time, so they were checked by breaking the
+  keep-env grep by hand once before committing.

@@ -330,6 +330,8 @@ export function normaliseDeploy(raw) {
   if (raw.then !== undefined) d.then = String(raw.then);
   if (raw.only !== undefined) d.only = splitList(raw.only);
   if (raw.imageRefs !== undefined) d.imageRefs = splitList(raw.imageRefs);
+  if (raw.upload !== undefined) d.upload = [].concat(raw.upload).map(String); // "<local>:<server folder>", never split on commas
+  if (raw.keepEnv !== undefined) d.keepEnv = splitList(raw.keepEnv);
   if (raw.images !== undefined) {
     if (!raw.images || typeof raw.images !== 'object' || Array.isArray(raw.images)) {
       throw new ConfigError(`"deploy.images" in ${PROJECT_FILE} must map image names to {"tagAs", "services"}.`);

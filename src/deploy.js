@@ -9,17 +9,18 @@
  * "load-only" (retag only, optionally followed by --then "<remote command>").
  *
  * Connections used per deploy (servers that rate-limit SSH care): transfer ssh = 3 (look, load,
- * deploy script), transfer pull = 1.
+ * deploy script), transfer pull = 1; --upload adds 1 however many folders it sends.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { Transform } from 'node:stream';
+import * as tar from 'tar';
 import { ConfigError, DockeriserError, EXIT } from './errors.js';
 import { expandImage, parseDeployImage } from './image.js';
-import { canonicalMode, loadProject, normaliseDeploy, splitList, validateDeployTarget, writeProjectFile } from './project.js';
+import { canonicalMode, loadProject, normaliseDeploy, relInside, splitList, validateDeployTarget, writeProjectFile } from './project.js';
 import { readProjectState, writeProjectState } from './project-state.js';
-import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, stateKey } from './remote.js';
+import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, remoteBash, stateKey, uploadScript } from './remote.js';
 import { archiveSize, progressText, saveArchiveStream } from './save-tar.js';
 import { resolveServer } from './servers.js';
 import { sshError } from './ssh.js';
@@ -54,6 +55,46 @@ export function parseTagAs(values = [], names = [], { positional = false } = {})
     else throw new ConfigError(`--tag-as "${v}" does not say which image it is for.`, { fix: `With several images use --tag-as <image>=<name:tag>, e.g. --tag-as ${names[0] || 'web'}=myapp-web:prod.` });
   }
   return map;
+}
+
+/**
+ * Parse `--upload <local>:<remote>`: a folder or file inside the project, and an absolute folder on
+ * the server (split at the last ":/", so Windows paths like C:\x work).
+ * @param {string} value
+ * @param {string} root Project folder.
+ * @returns {{from: string, rel: string, abs: string, to: string, isDir: boolean}}
+ */
+export function parseUpload(value, root) {
+  const m = String(value).match(/^(.+):(\/.*)$/);
+  if (!m) {
+    throw new ConfigError(`--upload "${value}" must be <local folder or file>:<absolute folder on the server>.`, { fix: 'For example --upload .local/deploy/bundle:/opt/myapp' });
+  }
+  const to = m[2].replace(/\/+$/, '');
+  if (!to) throw new ConfigError(`--upload "${value}" would copy into / on the server.`, { fix: 'Name a folder, e.g. /opt/myapp.' });
+  const rel = relInside(root, m[1], '--upload');
+  const abs = path.join(root, rel);
+  let st;
+  try {
+    st = fs.statSync(abs);
+  } catch {
+    throw new ConfigError(`--upload: ${abs} does not exist.`, { fix: 'Create it first (run the step that assembles it), or fix the path.' });
+  }
+  return { from: m[1], rel, abs, to, isDir: st.isDirectory() };
+}
+
+/** Files and bytes under a path (a file counts as itself). */
+function treeSize(abs) {
+  const st = fs.statSync(abs);
+  if (!st.isDirectory()) return { files: 1, bytes: st.size };
+  let files = 0;
+  let bytes = 0;
+  for (const e of fs.readdirSync(abs, { recursive: true, withFileTypes: true })) {
+    if (e.isFile()) {
+      files++;
+      bytes += fs.statSync(path.join(e.parentPath ?? e.path, e.name)).size;
+    }
+  }
+  return { files, bytes };
 }
 
 /** The deploy `--image` values as a list (the CLI passes an array; older callers a string). */
@@ -151,8 +192,15 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   const compose = { dir: flags['compose-dir'] || d.composeDir || null, file: flags['compose-file'] || d.composeFile || null, project: flags['compose-project'] || d.composeProject || null };
   for (const it of items) if (!it.key) it.key = it.tagAs || it.name;
   const then = flags.then || d.then || null;
+  const uploadValues = flags.upload?.length ? flags.upload : d.upload || [];
+  const uploads = rollback ? [] : uploadValues.map((v) => parseUpload(v, project.root));
+  const keepEnv = splitList(flags['keep-env']).length ? splitList(flags['keep-env']) : d.keepEnv || [];
+  for (const k of keepEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new ConfigError(`--keep-env "${k}" is not a variable name.`);
+  if (keepEnv.length && !uploadValues.length) {
+    throw new ConfigError("--keep-env keeps lines of the server's .env when an --upload replaces it, but nothing is uploaded.", { fix: 'Add --upload <local folder>:<server folder>, or drop --keep-env.' });
+  }
 
-  const plan = { project, server, target, mode, transfer, items, run, compose, then, rollback, explicitImages: !built && imageFlags(flags).length > 0 };
+  const plan = { project, server, target, mode, transfer, items, run, compose, then, uploads, uploadValues, keepEnv, rollback, explicitImages: !built && imageFlags(flags).length > 0 };
   validateDeployTarget({ mode, transfer, ports: run.ports, name: run.name, healthUrl: run.healthUrl, composeDir: compose.dir, items });
   // Written after the first good deploy; settings that already exist are not rewritten unless --save.
   plan.saveSection = project.deploy || saved?.deploy ? null : deploySection(plan);
@@ -186,6 +234,8 @@ export function deploySection(plan) {
   // Explicit --image values, so a bare deploy, rollback or logs finds the same images (never a digest).
   if (plan.explicitImages && plan.items.length > 1) s.imageRefs = plan.items.map((it) => it.repository);
   else if (plan.explicitImages && !s.image && !plan.project.images.length) s.image = plan.items[0].name;
+  if (plan.uploadValues.length) s.upload = plan.uploadValues;
+  if (plan.keepEnv.length) s.keepEnv = plan.keepEnv;
   if (plan.then) s.then = plan.then;
   return s;
 }
@@ -315,6 +365,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
     diskFreeBefore: null,
     diskFreeAfter: null,
     then: plan.then ? 'not-run' : null,
+    uploads: plan.uploads.map((u) => ({ from: u.from, to: u.to, ...treeSize(u.abs), keptEnv: [] })),
     durationSec: 0,
     timings,
   };
@@ -362,9 +413,11 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
       then: plan.then,
     });
 
+  const upScript = plan.uploads.length ? uploadScript({ uploads: plan.uploads, keepEnv: plan.keepEnv }) : null;
   if (dryRun) {
     result.status = 'DRY_RUN';
-    result.script = scriptFor(envBase64 ? 'UkVEQUNURUQ=' : null); // env contents are never shown
+    const deploy = scriptFor(envBase64 ? 'UkVEQUNURUQ=' : null); // env contents are never shown
+    result.script = upScript ? `# ---- upload (own ssh connection, runs first; stdin is the files as .tar.gz) ----\n${upScript}# ---- deploy ----\n${deploy}` : deploy;
     return done();
   }
 
@@ -410,7 +463,24 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
     }
   }
 
-  // 4. The deploy script: one SSH session.
+  // 4. Uploads: every folder in one tar stream over one SSH connection, before the deploy script and --then.
+  if (upScript) {
+    out.step(`Uploading to ${server.host}`);
+    for (const u of result.uploads) out.info(`    ${u.from} -> ${u.to} (${u.files} file${u.files === 1 ? '' : 's'}, ${(u.bytes / 1024).toFixed(1)} KB)`);
+    const stream = tar.c({ cwd: plan.project.root, gzip: true, portable: true }, plan.uploads.map((u) => u.rel));
+    const res = await timed('uploadSec', () => ssh.exec(server, remoteBash(upScript), { input: stream, onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) }));
+    if (res.code === 255) throw sshError(res, server);
+    const { marks, values } = parseMarks(res.stdout);
+    if (res.code !== 0 || values.upload !== 'ok') {
+      throw new DockeriserError(`Uploading to ${server.host} failed (exit ${res.code}): ${res.stderr.trim().split('\n').slice(-2).join(' ')}`, { fix: 'Nothing was deployed. Check the server folder and its permissions, then deploy again.' });
+    }
+    result.uploads.forEach((u, i) => {
+      u.keptEnv = (marks.find((m) => m.up === String(i) && m.kept !== undefined)?.kept || '').split(' ').filter(Boolean);
+      if (u.keptEnv.length) out.info(`    kept ${u.keptEnv.join(', ')} from the server's ${u.to}/.env`);
+    });
+  }
+
+  // 5. The deploy script: one SSH session.
   out.step(`${rollback ? 'Rolling back' : 'Deploying'} on ${server.host} (${mode})`);
   const res = await timed('scriptSec', () => runScript({ ssh, server, script: scriptFor(envBase64), out }));
   const v = res.values;
