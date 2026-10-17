@@ -248,8 +248,12 @@ test('deploy settings: flags beat dockeriser.json; the first deploy saves settin
   assert.equal(plan.run.name, 'web');
   assert.equal(plan.items[0].repository, `${REPO}/web`);
   assert.equal(plan.items[0].tag, 'latest');
-  saveDeploySection(plan);
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'dockeriser.json'), 'utf8'));
+  const where = saveDeploySection(plan, { homeDir: home });
+  assert.equal(where.kind, 'project-state');
+  assert.ok(!fs.existsSync(path.join(dir, 'dockeriser.json')), 'the repo is left alone');
+  const saved = JSON.parse(fs.readFileSync(where.file, 'utf8'));
+  assert.ok(where.file.startsWith(path.join(home, '.dockeriser', 'projects')));
+  assert.equal(saved.root, path.resolve(dir));
   assert.deepEqual(saved.deploy, { server: 'prod', mode: 'run', name: 'web', ports: ['80:3000'], envFile: '.env', healthUrl: 'http://localhost:3000/', image: 'web' });
   assert.ok(!JSON.stringify(saved).includes('hunter2'));
 
@@ -395,4 +399,28 @@ test('deploy by digest: the exact image, no tag lookup', async () => {
   const result = await executeDeploy({ plan, ssh: { exec: () => assert.fail('no ssh') }, getRegistry: () => assert.fail('a digest needs no lookup'), out: o, dryRun: true });
   assert.equal(result.digest, digest);
   assert.match(result.script, new RegExp(`web:dk-${'ab'.repeat(6)}`));
+});
+
+test('per-user deploy settings: rollback and logs reuse them; --save writes dockeriser.json; dockeriser.json wins', () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['app:demo', 'web:demo'], then: 'bash /opt/x/setup.sh' }, cfg: CFG, homeDir: home, env: {} });
+  saveDeploySection(plan, { homeDir: home });
+  for (const rollback of [true, false]) {
+    const again = planDeploy({ dir, flags: {}, cfg: CFG, homeDir: home, env: {}, rollback });
+    assert.equal(again.server.host, 'root@203.0.113.5');
+    assert.equal(again.mode, 'load-only');
+    assert.deepEqual(again.items.map((i) => [i.repository, i.tagAs, i.key]), [[`${REPO}/app`, 'app:demo', 'app:demo'], [`${REPO}/web`, 'web:demo', 'web:demo']]);
+    assert.equal(again.then, 'bash /opt/x/setup.sh');
+    assert.equal(again.saveSection, null, 'saved settings are not rewritten');
+  }
+  assert.equal(saveDeploySection(plan, { homeDir: home, where: 'none' }), null);
+  const file = saveDeploySection(plan, { homeDir: home, where: 'file' });
+  assert.equal(file.kind, 'dockeriser.json');
+  const written = JSON.parse(fs.readFileSync(path.join(dir, 'dockeriser.json'), 'utf8'));
+  assert.deepEqual(written.deploy.imageRefs, [`${REPO}/app`, `${REPO}/web`]);
+  // dockeriser.json's own deploy section beats the per-user one.
+  fs.writeFileSync(path.join(dir, 'dockeriser.json'), JSON.stringify({ deploy: { server: 'root@198.51.100.7', mode: 'load-only', image: 'other', images: { other: { tagAs: 'other:x' } } } }));
+  const fromFile = planDeploy({ dir, flags: {}, cfg: CFG, homeDir: home, env: {} });
+  assert.equal(fromFile.server.host, 'root@198.51.100.7');
+  assert.deepEqual(fromFile.items.map((i) => i.name), ['other']);
 });

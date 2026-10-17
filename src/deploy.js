@@ -17,7 +17,8 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { ConfigError, DockeriserError, EXIT } from './errors.js';
 import { expandImage, parseDeployImage } from './image.js';
-import { canonicalMode, loadProject, splitList, validateDeployTarget, writeProjectFile } from './project.js';
+import { canonicalMode, loadProject, normaliseDeploy, splitList, validateDeployTarget, writeProjectFile } from './project.js';
+import { readProjectState, writeProjectState } from './project-state.js';
 import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, stateKey } from './remote.js';
 import { archiveSize, progressText, saveArchiveStream } from './save-tar.js';
 import { resolveServer } from './servers.js';
@@ -76,7 +77,9 @@ const shortName = (repository) => repository.split('/').pop();
  */
 export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollback = false }) {
   const project = loadProject(dir);
-  const d = project.deploy || {};
+  // dockeriser.json's deploy section wins; else what an earlier deploy saved for this folder.
+  const saved = project.deploy ? null : readProjectState(homeDir, project.root);
+  const d = project.deploy || normaliseDeploy(saved?.deploy) || {};
   const target = flags.to || d.server;
   const server = resolveServer(target, { homeDir, env, flags: { key: flags.key, port: flags.port } });
   const mode = canonicalMode(flags.mode || d.mode || (flags['compose-dir'] || d.composeDir ? 'compose' : 'run'));
@@ -99,6 +102,8 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
       if (seen.has(s.name)) throw new ConfigError(`--image names "${s.name}" twice.`, { fix: 'Deploy each image once; pick one tag or digest.' });
       seen.add(s.name);
     }
+  } else if (d.imageRefs?.length) {
+    sources = d.imageRefs.map((v) => parseDeployImage(v, cfg));
   } else if (project.images.length) {
     let list = project.images.filter((i) => i.push);
     if (only.length) list = list.filter((i) => only.includes(i.name));
@@ -147,9 +152,10 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   for (const it of items) if (!it.key) it.key = it.tagAs || it.name;
   const then = flags.then || d.then || null;
 
-  const plan = { project, server, target, mode, transfer, items, run, compose, then, rollback };
+  const plan = { project, server, target, mode, transfer, items, run, compose, then, rollback, explicitImages: !built && imageFlags(flags).length > 0 };
   validateDeployTarget({ mode, transfer, ports: run.ports, name: run.name, healthUrl: run.healthUrl, composeDir: compose.dir, items });
-  plan.saveSection = project.deploy ? null : deploySection(plan);
+  // Written after the first good deploy; settings that already exist are not rewritten unless --save.
+  plan.saveSection = project.deploy || saved?.deploy ? null : deploySection(plan);
   return plan;
 }
 
@@ -177,17 +183,30 @@ export function deploySection(plan) {
     if (Object.keys(e).length) images[it.name] = e;
   }
   if (Object.keys(images).length) s.images = images;
+  // Explicit --image values, so a bare deploy, rollback or logs finds the same images (never a digest).
+  if (plan.explicitImages && plan.items.length > 1) s.imageRefs = plan.items.map((it) => it.repository);
+  else if (plan.explicitImages && !s.image && !plan.project.images.length) s.image = plan.items[0].name;
   if (plan.then) s.then = plan.then;
   return s;
 }
 
-/** Save the deploy section into dockeriser.json (creating the file if needed). */
-export function saveDeploySection(plan) {
-  if (!plan.saveSection) return false;
-  const data = plan.project.raw ? { ...plan.project.raw } : {};
-  data.deploy = plan.saveSection;
-  writeProjectFile(plan.project.file, data);
-  return true;
+/**
+ * Save the deploy settings after a good deploy: per user (default, the repo stays clean), into
+ * dockeriser.json (`--save`, always rewrites the section), or nowhere (`--no-save`).
+ * @param {ReturnType<typeof planDeploy>} plan
+ * @param {{homeDir: string, where?: 'state'|'file'|'none'}} opts
+ * @returns {{kind: 'project-state'|'dockeriser.json', file: string}|null}
+ */
+export function saveDeploySection(plan, { homeDir, where = 'state' }) {
+  if (where === 'none') return null;
+  if (where === 'file') {
+    const data = plan.project.raw ? { ...plan.project.raw } : {};
+    data.deploy = deploySection(plan);
+    writeProjectFile(plan.project.file, data);
+    return { kind: 'dockeriser.json', file: plan.project.file };
+  }
+  if (!plan.saveSection) return null;
+  return { kind: 'project-state', file: writeProjectState(homeDir, plan.project.root, plan.saveSection) };
 }
 
 /** Bytes counter that reports progress at most every `everyMs`. */

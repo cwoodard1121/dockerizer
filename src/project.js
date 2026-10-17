@@ -310,6 +310,7 @@ export function normaliseDeploy(raw) {
   if (raw.composeProject !== undefined) d.composeProject = String(raw.composeProject);
   if (raw.then !== undefined) d.then = String(raw.then);
   if (raw.only !== undefined) d.only = splitList(raw.only);
+  if (raw.imageRefs !== undefined) d.imageRefs = splitList(raw.imageRefs);
   if (raw.images !== undefined) {
     if (!raw.images || typeof raw.images !== 'object' || Array.isArray(raw.images)) {
       throw new ConfigError(`"deploy.images" in ${PROJECT_FILE} must map image names to {"tagAs", "services"}.`);

@@ -285,3 +285,10 @@ test('build refuses a repeated --image; deploy --build --image a --image b build
   const d3 = deps({ env, homeDir: home });
   assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'zz', '--to', 'root@203.0.113.5', '--dry-run', '--json'], d3), 2);
 });
+
+test('deploy --save and --no-save together exit 2', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home });
+  assert.equal(await run(['deploy', tempTree({}), '--to', 'root@203.0.113.5', '--image', 'web', '--save', '--no-save', '--json'], d), 2);
+  assert.match(JSON.parse(d.stdout.text()).error.message, /--save and --no-save/);
+});

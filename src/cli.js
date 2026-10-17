@@ -124,6 +124,8 @@ const OPTIONS = {
   service: { type: 'string', multiple: true },
   'tag-as': { type: 'string', multiple: true },
   then: { type: 'string' },
+  save: { type: 'boolean', default: false },
+  'no-save': { type: 'boolean', default: false },
   follow: { type: 'boolean', default: false },
   tail: { type: 'string' },
   // server
@@ -458,12 +460,19 @@ function registryFactory({ env, homeDir, cfg, createClients, deps }) {
 
 /** Plan + run a deploy (shared by deploy, deploy --build and build --deploy). */
 async function deployWith({ flags, env, homeDir, createClients, deps, out, dir, built = null, rollback = false }) {
+  if (flags.save && flags['no-save']) throw new ConfigError('--save and --no-save cannot be used together.', { fix: '--save writes the settings into dockeriser.json; --no-save keeps nothing; by default they are kept per user.' });
   const cfg = resolveConfig({ searched: homeSearch({ env }), flags, env, homeDir });
   const plan = planDeploy({ dir, flags, cfg, homeDir, env, built, rollback });
   const ssh = deps.ssh || createSshRunner({ homeDir });
   const result = await executeDeploy({ plan, ssh, getRegistry: registryFactory({ env, homeDir, cfg, createClients, deps }), out, dryRun: flags['dry-run'] });
-  if (!flags['dry-run'] && !rollback && result.exitCode === 0 && saveDeploySection(plan)) {
-    out.info(`    saved these deploy settings in ${plan.project.file}; next time just run: dockeriser deploy${flags.build ? ' --build' : ''}`);
+  result.saved = null;
+  if (!flags['dry-run'] && !rollback && result.exitCode === 0) {
+    const saved = saveDeploySection(plan, { homeDir, where: flags['no-save'] ? 'none' : flags.save ? 'file' : 'state' });
+    if (saved) {
+      result.saved = saved.kind;
+      const where = saved.kind === 'dockeriser.json' ? `in ${saved.file}` : `for this folder in ${saved.file} (not in the repo; --save puts them in dockeriser.json)`;
+      out.info(`    saved these deploy settings ${where}; next time just run: dockeriser deploy${flags.build ? ' --build' : ''}`);
+    }
   }
   return result;
 }
