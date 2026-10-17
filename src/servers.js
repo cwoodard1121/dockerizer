@@ -5,21 +5,20 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { configDir, readConfigFile } from './config.js';
+import { configDir, readConfigFile, userHome } from './config.js';
 import { ConfigError } from './errors.js';
 import { checkHost } from './ssh.js';
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 /** Path of the per-user config file. */
-export function configFile(homeDir = os.homedir()) {
+export function configFile(homeDir = userHome()) {
   return path.join(configDir(homeDir), 'config.json');
 }
 
 /** Read the whole config file ({} when missing). */
-export function readUserConfig(homeDir = os.homedir()) {
+export function readUserConfig(homeDir = userHome()) {
   return readConfigFile(configFile(homeDir));
 }
 
@@ -46,7 +45,7 @@ export function checkServerName(name) {
  * @param {{homeDir?: string, env?: Record<string, string|undefined>, flags?: {key?: string, port?: string}}} [opts]
  * @returns {{name: string|null, host: string, port?: number, key?: string, transfer: 'ssh'|'pull', keyId?: string, saved: boolean}}
  */
-export function resolveServer(target, { homeDir = os.homedir(), env = process.env, flags = {} } = {}) {
+export function resolveServer(target, { homeDir = userHome(), env = process.env, flags = {} } = {}) {
   if (!target) {
     throw new ConfigError('No server given.', { fix: 'Pass --to <server> (a name from `dockeriser server list`, or user@host), or set "deploy.server" in dockeriser.json.' });
   }
@@ -70,7 +69,7 @@ export function resolveServer(target, { homeDir = os.homedir(), env = process.en
 }
 
 /** List saved servers (no secrets are stored, so all fields are safe to print). */
-export function listServers(homeDir = os.homedir()) {
+export function listServers(homeDir = userHome()) {
   const cfg = readUserConfig(homeDir);
   return { sshKey: cfg.sshKey || null, servers: Object.entries(cfg.servers || {}).map(([name, s]) => ({ name, ...s })) };
 }

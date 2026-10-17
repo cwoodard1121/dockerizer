@@ -265,3 +265,59 @@ test('first Ctrl-C cancels the build and exits 130; JSON still printed', async (
   assert.equal(out.status, 'CANCELLED');
   assert.equal(out.exitCode, 130);
 });
+
+test('build refuses a repeated --image; deploy --build --image a --image b builds those dockeriser.json images', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home });
+  assert.equal(await run(['build', HELLO, '--image', 'a', '--image', 'b', '--json'], d), 2);
+  assert.match(JSON.parse(d.stdout.text()).error.message, /one --image/);
+
+  const dir = tempTree({
+    'a/Dockerfile': 'FROM alpine\n',
+    'b/Dockerfile': 'FROM alpine\n',
+    'c/Dockerfile': 'FROM alpine\n',
+    'dockeriser.json': JSON.stringify({ images: [{ name: 'a', context: 'a' }, { name: 'b', context: 'b' }, { name: 'c', context: 'c' }] }),
+  });
+  const d2 = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'b', '--to', 'root@203.0.113.5', '--mode', 'load-only', '--dry-run', '--sequential'], d2), 0);
+  const steps = JSON.parse(d2.stdout.text()).request.build.steps.map((s) => s.id);
+  assert.deepEqual(steps.filter((s) => s.startsWith('build-')), ['build-a', 'build-b']);
+  const d3 = deps({ env, homeDir: home });
+  assert.equal(await run(['deploy', dir, '--build', '--image', 'a', '--image', 'zz', '--to', 'root@203.0.113.5', '--dry-run', '--json'], d3), 2);
+});
+
+test('deploy --save and --no-save together exit 2', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home });
+  assert.equal(await run(['deploy', tempTree({}), '--to', 'root@203.0.113.5', '--image', 'web', '--save', '--no-save', '--json'], d), 2);
+  assert.match(JSON.parse(d.stdout.text()).error.message, /--save and --no-save/);
+});
+
+test('build warns about secret-looking build args by name, never by value', async () => {
+  const { home, env } = setUpHome();
+  const d = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['build', HELLO, '--image', 'hello:v1', '--build-arg', 'API_TOKEN=abc123', '--build-arg', 'NEXT_PUBLIC_URL=x', '--dry-run'], d), 0);
+  assert.match(d.stderr.text(), /build args API_TOKEN look like secrets/);
+  assert.ok(!d.stderr.text().includes('abc123'));
+});
+
+test('prebuild runs for the selected images before packaging (dry run too); a failure stops the build', async () => {
+  const { home, env } = setUpHome();
+  const node = JSON.stringify(process.execPath);
+  const stage = `${node} -e "require('fs').mkdirSync('app-ctx',{recursive:true});require('fs').writeFileSync('app-ctx/staged.txt','x');console.log('staged')"`;
+  const dir = tempTree({
+    'Dockerfile.app': 'FROM alpine\nCOPY staged.txt /\n',
+    'web/Dockerfile': 'FROM alpine\n',
+    'dockeriser.json': JSON.stringify({ images: [{ name: 'app', context: 'app-ctx', dockerfile: 'Dockerfile.app', prebuild: stage }, { name: 'web', context: 'web', prebuild: `${node} -e "process.exit(1)"` }] }),
+  });
+  const d = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['build', dir, '--only', 'app', '--dry-run', '--json'], d), 0, d.stderr.text());
+  assert.ok(fs.existsSync(path.join(dir, 'app-ctx', 'staged.txt')), 'the context was staged');
+  assert.match(d.stderr.text(), /prebuild app:/);
+  assert.match(d.stderr.text(), /staged/);
+  assert.ok(JSON.parse(d.stdout.text()).source.fileCount >= 2);
+
+  const d2 = deps({ env, homeDir: home, tmpDir: tempTree({}) });
+  assert.equal(await run(['build', dir, '--dry-run', '--json'], d2), 2);
+  assert.match(JSON.parse(d2.stdout.text()).error.message, /prebuild for image "web" failed \(exit 1\)/);
+});

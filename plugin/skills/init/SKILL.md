@@ -31,7 +31,10 @@ packages the first time). The project folder is the argument, or the current pro
    key, suggest putting `"sshKey"` in `%USERPROFILE%\.dockeriser\config.json` once.
 4. **Write dockeriser.json.** Start from the detected config, then fix it with what you learned:
    - Image names, contexts and Dockerfile paths.
-   - `localTag` for a base image that a later Dockerfile builds FROM.
+   - `localTag` for a base image that a later Dockerfile builds FROM (both then build in one Cloud
+     Build run, so the FROM works unchanged).
+   - `prebuild` for an image whose context a script assembles (e.g. `"node scripts/stage.mjs"`), so
+     the build does it first instead of a separate manual step.
    - `buildArgsFile` plus `buildArgsFromEnv`, so only public variables are sent.
    - `"source": "git"` if the project builds from tracked files only.
    - The `deploy` section:

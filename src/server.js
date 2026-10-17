@@ -24,10 +24,13 @@ export const PULLER_ID = 'dockeriser-puller';
 /** Default gcloud runner: returns {code, stdout, stderr}; never prints. */
 export function createGcloudRunner({ env = process.env } = {}) {
   return (args) => {
-    const found = findGcloud({ env });
-    if (!found.installed) throw new ConfigError('gcloud is not installed.', { fix: 'Install it (Windows: winget install Google.CloudSDK), open a new terminal, and sign in with `gcloud auth login`.' });
-    const quoted = process.platform === 'win32' ? args.map((a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)) : args;
-    const res = spawnSync(found.path, quoted, { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true, env });
+    const found = findGcloud({ env }); // a path, or null
+    if (!found) throw new ConfigError('gcloud is not installed.', { fix: 'Install it (Windows: winget install Google.CloudSDK), open a new terminal, and sign in with `gcloud auth login`.' });
+    const win = process.platform === 'win32';
+    const q = (a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
+    // gcloud.cmd needs a shell on Windows, which joins the command line: quote the path ("Cloud SDK") too.
+    const opts = { encoding: 'utf8', windowsHide: true, env };
+    const res = win ? spawnSync([found, ...args].map(q).join(' '), { ...opts, shell: true }) : spawnSync(found, args, opts);
     return { code: res.status ?? 1, stdout: res.stdout || '', stderr: res.stderr || '' };
   };
 }

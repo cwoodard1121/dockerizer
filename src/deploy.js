@@ -9,16 +9,18 @@
  * "load-only" (retag only, optionally followed by --then "<remote command>").
  *
  * Connections used per deploy (servers that rate-limit SSH care): transfer ssh = 3 (look, load,
- * deploy script), transfer pull = 1.
+ * deploy script), transfer pull = 1; --upload adds 1 however many folders it sends.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { Transform } from 'node:stream';
+import * as tar from 'tar';
 import { ConfigError, DockeriserError, EXIT } from './errors.js';
-import { expandImage } from './image.js';
-import { canonicalMode, loadProject, splitList, validateDeployTarget, writeProjectFile } from './project.js';
-import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, stateKey } from './remote.js';
+import { expandImage, parseDeployImage } from './image.js';
+import { canonicalMode, loadProject, normaliseDeploy, relInside, splitList, validateDeployTarget, writeProjectFile } from './project.js';
+import { readProjectState, writeProjectState } from './project-state.js';
+import { deployScript, dkRef, itemMarks, loadCommand, logsScript, parseMarks, probeScript, remoteBash, stateKey, uploadScript } from './remote.js';
 import { archiveSize, progressText, saveArchiveStream } from './save-tar.js';
 import { resolveServer } from './servers.js';
 import { sshError } from './ssh.js';
@@ -26,16 +28,78 @@ import { sshError } from './ssh.js';
 /** Exit code for a deploy that reached the server but failed (health check, rollback, --then). */
 export const DEPLOY_FAILED = EXIT.BUILD_FAILED;
 
-/** Split repeated `--tag-as` values: `name=ref` pairs, or one bare ref for a single image. */
-export function parseTagAs(values = [], names = []) {
+/**
+ * Split repeated `--tag-as` values: `name=ref` pairs, one bare ref for a single image, or one bare
+ * ref per image in `--image` order (`positional`, when the counts match).
+ */
+export function parseTagAs(values = [], names = [], { positional = false } = {}) {
+  const named = (v) => {
+    const eq = v.indexOf('=');
+    return eq > 0 && !v.slice(0, eq).includes(':') && !v.slice(0, eq).includes('/') ? [v.slice(0, eq), v.slice(eq + 1)] : null;
+  };
+  const bare = values.filter((v) => !named(v));
+  if (bare.length && bare.length < values.length && names.length > 1) {
+    throw new ConfigError('--tag-as values mix <image>=<name:tag> and bare <name:tag> forms.', { fix: 'Use one form: all <image>=<name:tag>, or one bare value per --image, in the same order.' });
+  }
+  if (positional && names.length > 1 && bare.length === values.length && values.length) {
+    if (values.length !== names.length) {
+      throw new ConfigError(`${values.length} --tag-as value${values.length === 1 ? '' : 's'} for ${names.length} images.`, { fix: 'Pass one --tag-as per --image, in the same order, or use --tag-as <image>=<name:tag>.' });
+    }
+    return Object.fromEntries(names.map((n, i) => [n, values[i]]));
+  }
   const map = {};
   for (const v of values) {
-    const eq = v.indexOf('=');
-    if (eq > 0 && !v.slice(0, eq).includes(':') && !v.slice(0, eq).includes('/')) map[v.slice(0, eq)] = v.slice(eq + 1);
+    const pair = named(v);
+    if (pair) map[pair[0]] = pair[1];
     else if (names.length === 1) map[names[0]] = v;
     else throw new ConfigError(`--tag-as "${v}" does not say which image it is for.`, { fix: `With several images use --tag-as <image>=<name:tag>, e.g. --tag-as ${names[0] || 'web'}=myapp-web:prod.` });
   }
   return map;
+}
+
+/**
+ * Parse `--upload <local>:<remote>`: a folder or file inside the project, and an absolute folder on
+ * the server (split at the last ":/", so Windows paths like C:\x work).
+ * @param {string} value
+ * @param {string} root Project folder.
+ * @returns {{from: string, rel: string, abs: string, to: string, isDir: boolean}}
+ */
+export function parseUpload(value, root) {
+  const m = String(value).match(/^(.+):(\/.*)$/);
+  if (!m) {
+    throw new ConfigError(`--upload "${value}" must be <local folder or file>:<absolute folder on the server>.`, { fix: 'For example --upload .local/deploy/bundle:/opt/myapp' });
+  }
+  const to = m[2].replace(/\/+$/, '');
+  if (!to) throw new ConfigError(`--upload "${value}" would copy into / on the server.`, { fix: 'Name a folder, e.g. /opt/myapp.' });
+  const rel = relInside(root, m[1], '--upload');
+  const abs = path.join(root, rel);
+  let st;
+  try {
+    st = fs.statSync(abs);
+  } catch {
+    throw new ConfigError(`--upload: ${abs} does not exist.`, { fix: 'Create it first (run the step that assembles it), or fix the path.' });
+  }
+  return { from: m[1], rel, abs, to, isDir: st.isDirectory() };
+}
+
+/** Files and bytes under a path (a file counts as itself). */
+function treeSize(abs) {
+  const st = fs.statSync(abs);
+  if (!st.isDirectory()) return { files: 1, bytes: st.size };
+  let files = 0;
+  let bytes = 0;
+  for (const e of fs.readdirSync(abs, { recursive: true, withFileTypes: true })) {
+    if (e.isFile()) {
+      files++;
+      bytes += fs.statSync(path.join(e.parentPath ?? e.path, e.name)).size;
+    }
+  }
+  return { files, bytes };
+}
+
+/** The deploy `--image` values as a list (the CLI passes an array; older callers a string). */
+export function imageFlags(flags) {
+  return [].concat(flags.image ?? []).filter(Boolean);
 }
 
 /** Short image name: last path part of a repository. */
@@ -54,7 +118,9 @@ const shortName = (repository) => repository.split('/').pop();
  */
 export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollback = false }) {
   const project = loadProject(dir);
-  const d = project.deploy || {};
+  // dockeriser.json's deploy section wins; else what an earlier deploy saved for this folder.
+  const saved = project.deploy ? null : readProjectState(homeDir, project.root);
+  const d = project.deploy || normaliseDeploy(saved?.deploy) || {};
   const target = flags.to || d.server;
   const server = resolveServer(target, { homeDir, env, flags: { key: flags.key, port: flags.port } });
   const mode = canonicalMode(flags.mode || d.mode || (flags['compose-dir'] || d.composeDir ? 'compose' : 'run'));
@@ -66,11 +132,19 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   if (built) {
     sources = built.map((b) => ({ name: b.name, repository: b.repository, digest: b.digest }));
     // Built images that the deploy section does not map (e.g. a pushed base image) stay put.
-    if (only.length) sources = sources.filter((s) => only.includes(s.name));
+    const wanted = imageFlags(flags);
+    if (wanted.length > 1) sources = wanted.map((n) => sources.find((s) => s.name === n || shortName(s.repository) === n)).filter(Boolean); // --image order, for --tag-as pairing
+    else if (only.length) sources = sources.filter((s) => only.includes(s.name));
     else if (d.images && Object.keys(d.images).length && sources.some((s) => d.images[s.name])) sources = sources.filter((s) => d.images[s.name]);
-  } else if (flags.image) {
-    const img = expandImage({ image: flags.image, project: cfg.project, region: cfg.region, repo: cfg.repo, fallbackTag: () => 'latest' });
-    sources = [{ name: shortName(img.repository), repository: img.repository, tag: img.tags[0] }];
+  } else if (imageFlags(flags).length) {
+    sources = imageFlags(flags).map((v) => parseDeployImage(v, cfg));
+    const seen = new Set();
+    for (const s of sources) {
+      if (seen.has(s.name)) throw new ConfigError(`--image names "${s.name}" twice.`, { fix: 'Deploy each image once; pick one tag or digest.' });
+      seen.add(s.name);
+    }
+  } else if (d.imageRefs?.length) {
+    sources = d.imageRefs.map((v) => parseDeployImage(v, cfg));
   } else if (project.images.length) {
     let list = project.images.filter((i) => i.push);
     if (only.length) list = list.filter((i) => only.includes(i.name));
@@ -90,7 +164,7 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
     });
   }
 
-  const tagAs = parseTagAs(flags['tag-as'] || [], sources.map((s) => s.name));
+  const tagAs = parseTagAs(flags['tag-as'] || [], sources.map((s) => s.name), { positional: imageFlags(flags).length > 1 });
   const flagServices = splitList(flags.service);
   const items = sources.map((s, i) => {
     const conf = d.images?.[s.name] || {};
@@ -118,10 +192,18 @@ export function planDeploy({ dir, flags, cfg, homeDir, env, built = null, rollba
   const compose = { dir: flags['compose-dir'] || d.composeDir || null, file: flags['compose-file'] || d.composeFile || null, project: flags['compose-project'] || d.composeProject || null };
   for (const it of items) if (!it.key) it.key = it.tagAs || it.name;
   const then = flags.then || d.then || null;
+  const uploadValues = flags.upload?.length ? flags.upload : d.upload || [];
+  const uploads = rollback ? [] : uploadValues.map((v) => parseUpload(v, project.root));
+  const keepEnv = splitList(flags['keep-env']).length ? splitList(flags['keep-env']) : d.keepEnv || [];
+  for (const k of keepEnv) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new ConfigError(`--keep-env "${k}" is not a variable name.`);
+  if (keepEnv.length && !uploadValues.length) {
+    throw new ConfigError("--keep-env keeps lines of the server's .env when an --upload replaces it, but nothing is uploaded.", { fix: 'Add --upload <local folder>:<server folder>, or drop --keep-env.' });
+  }
 
-  const plan = { project, server, target, mode, transfer, items, run, compose, then, rollback };
+  const plan = { project, server, target, mode, transfer, items, run, compose, then, uploads, uploadValues, keepEnv, rollback, explicitImages: !built && imageFlags(flags).length > 0 };
   validateDeployTarget({ mode, transfer, ports: run.ports, name: run.name, healthUrl: run.healthUrl, composeDir: compose.dir, items });
-  plan.saveSection = project.deploy ? null : deploySection(plan);
+  // Written after the first good deploy; settings that already exist are not rewritten unless --save.
+  plan.saveSection = project.deploy || saved?.deploy ? null : deploySection(plan);
   return plan;
 }
 
@@ -149,17 +231,32 @@ export function deploySection(plan) {
     if (Object.keys(e).length) images[it.name] = e;
   }
   if (Object.keys(images).length) s.images = images;
+  // Explicit --image values, so a bare deploy, rollback or logs finds the same images (never a digest).
+  if (plan.explicitImages && plan.items.length > 1) s.imageRefs = plan.items.map((it) => it.repository);
+  else if (plan.explicitImages && !s.image && !plan.project.images.length) s.image = plan.items[0].name;
+  if (plan.uploadValues.length) s.upload = plan.uploadValues;
+  if (plan.keepEnv.length) s.keepEnv = plan.keepEnv;
   if (plan.then) s.then = plan.then;
   return s;
 }
 
-/** Save the deploy section into dockeriser.json (creating the file if needed). */
-export function saveDeploySection(plan) {
-  if (!plan.saveSection) return false;
-  const data = plan.project.raw ? { ...plan.project.raw } : {};
-  data.deploy = plan.saveSection;
-  writeProjectFile(plan.project.file, data);
-  return true;
+/**
+ * Save the deploy settings after a good deploy: per user (default, the repo stays clean), into
+ * dockeriser.json (`--save`, always rewrites the section), or nowhere (`--no-save`).
+ * @param {ReturnType<typeof planDeploy>} plan
+ * @param {{homeDir: string, where?: 'state'|'file'|'none'}} opts
+ * @returns {{kind: 'project-state'|'dockeriser.json', file: string}|null}
+ */
+export function saveDeploySection(plan, { homeDir, where = 'state' }) {
+  if (where === 'none') return null;
+  if (where === 'file') {
+    const data = plan.project.raw ? { ...plan.project.raw } : {};
+    data.deploy = deploySection(plan);
+    writeProjectFile(plan.project.file, data);
+    return { kind: 'dockeriser.json', file: plan.project.file };
+  }
+  if (!plan.saveSection) return null;
+  return { kind: 'project-state', file: writeProjectState(homeDir, plan.project.root, plan.saveSection) };
 }
 
 /** Bytes counter that reports progress at most every `everyMs`. */
@@ -238,6 +335,17 @@ const gb = (kb) => (kb ? `${(Number(kb) / 1024 / 1024).toFixed(1)} GB free` : 'u
  */
 export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = false, now = () => Date.now() }) {
   const { server, mode, transfer, items, rollback } = plan;
+  const t0 = now();
+  const secs = (ms) => Math.round(ms / 100) / 10;
+  const timings = { checkSec: 0, transferSec: 0, uploadSec: 0, scriptSec: 0 };
+  const timed = async (key, fn) => {
+    const t = now();
+    try {
+      return await fn();
+    } finally {
+      timings[key] = secs(now() - t);
+    }
+  };
   const result = {
     status: 'SUCCESS',
     exitCode: 0,
@@ -257,6 +365,13 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
     diskFreeBefore: null,
     diskFreeAfter: null,
     then: plan.then ? 'not-run' : null,
+    uploads: plan.uploads.map((u) => ({ from: u.from, to: u.to, ...treeSize(u.abs), keptEnv: [] })),
+    durationSec: 0,
+    timings,
+  };
+  const done = () => {
+    result.durationSec = secs(now() - t0);
+    return result;
   };
 
   // 1. Exact digests (a build hands them over; otherwise <image>:<tag> is looked up).
@@ -298,17 +413,19 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
       then: plan.then,
     });
 
+  const upScript = plan.uploads.length ? uploadScript({ uploads: plan.uploads, keepEnv: plan.keepEnv }) : null;
   if (dryRun) {
     result.status = 'DRY_RUN';
-    result.script = scriptFor(envBase64 ? 'UkVEQUNURUQ=' : null); // env contents are never shown
-    return result;
+    const deploy = scriptFor(envBase64 ? 'UkVEQUNURUQ=' : null); // env contents are never shown
+    result.script = upScript ? `# ---- upload (own ssh connection, runs first; stdin is the files as .tar.gz) ----\n${upScript}# ---- deploy ----\n${deploy}` : deploy;
+    return done();
   }
 
   // 3. Transfer "ssh": skip images the server already has, stream the rest into docker load.
   if (transfer === 'ssh' && !rollback) {
     const registry = await getRegistry();
     out.step(`Checking ${server.host}`);
-    const probe = await runScript({ ssh, server, script: probeScript({ refs: items.map((i) => i.dkRef) }), out, quiet: true });
+    const probe = await timed('checkSec', () => runScript({ ssh, server, script: probeScript({ refs: items.map((i) => i.dkRef) }), out, quiet: true }));
     if (probe.values.docker === 'missing') {
       throw new ConfigError(`Docker is not installed on ${server.host}.`, { fix: `Run: dockeriser server add <name> --host ${server.host} --install-docker   (or on the server: curl -fsSL https://get.docker.com | sh)` });
     }
@@ -339,16 +456,33 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
       }, { now });
       archive.on('error', (err) => counter.destroy(err));
       const piped = archive.pipe(counter);
-      const res = await ssh.exec(server, loadCommand(), { input: piped, onStdout: (t) => out.log(t.replace(/^(?=.)/gm, '    ')), onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) });
+      const res = await timed('transferSec', () => ssh.exec(server, loadCommand(), { input: piped, onStdout: (t) => out.log(t.replace(/^(?=.)/gm, '    ')), onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) }));
       if (res.code === 255) throw sshError(res, server);
       if (res.code !== 0) throw new DockeriserError(`docker load failed on ${server.host} (exit ${res.code}): ${res.stderr.trim().split('\n').slice(-2).join(' ')}`, { fix: 'Check free disk space on the server (`df -h`), then deploy again.' });
       result.transferredBytes = sent;
     }
   }
 
-  // 4. The deploy script: one SSH session.
+  // 4. Uploads: every folder in one tar stream over one SSH connection, before the deploy script and --then.
+  if (upScript) {
+    out.step(`Uploading to ${server.host}`);
+    for (const u of result.uploads) out.info(`    ${u.from} -> ${u.to} (${u.files} file${u.files === 1 ? '' : 's'}, ${(u.bytes / 1024).toFixed(1)} KB)`);
+    const stream = tar.c({ cwd: plan.project.root, gzip: true, portable: true }, plan.uploads.map((u) => u.rel));
+    const res = await timed('uploadSec', () => ssh.exec(server, remoteBash(upScript), { input: stream, onStderr: (t) => out.log(t.replace(/^(?=.)/gm, '    ')) }));
+    if (res.code === 255) throw sshError(res, server);
+    const { marks, values } = parseMarks(res.stdout);
+    if (res.code !== 0 || values.upload !== 'ok') {
+      throw new DockeriserError(`Uploading to ${server.host} failed (exit ${res.code}): ${res.stderr.trim().split('\n').slice(-2).join(' ')}`, { fix: 'Nothing was deployed. Check the server folder and its permissions, then deploy again.' });
+    }
+    result.uploads.forEach((u, i) => {
+      u.keptEnv = (marks.find((m) => m.up === String(i) && m.kept !== undefined)?.kept || '').split(' ').filter(Boolean);
+      if (u.keptEnv.length) out.info(`    kept ${u.keptEnv.join(', ')} from the server's ${u.to}/.env`);
+    });
+  }
+
+  // 5. The deploy script: one SSH session.
   out.step(`${rollback ? 'Rolling back' : 'Deploying'} on ${server.host} (${mode})`);
-  const res = await runScript({ ssh, server, script: scriptFor(envBase64), out });
+  const res = await timed('scriptSec', () => runScript({ ssh, server, script: scriptFor(envBase64), out }));
   const v = res.values;
   if (v.error === 'no-docker') throw new ConfigError(`Docker is not usable on ${server.host}.`, { fix: 'Install it with `dockeriser server add <name> --host <host> --install-docker`.' });
   if (v.error === 'no-previous') throw new ConfigError(`There is no previous image recorded on ${server.host} to roll back to.`);
@@ -366,7 +500,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
   if (res.code === 0 && v.result === 'ok') {
     out.ok(`${rollback ? 'Rolled back' : 'Deployed'} ${items.map((i) => i.label).join(', ')} on ${server.host}${mode === 'run' ? ` (container ${plan.run.name})` : ''}`);
     if (result.diskFreeBefore || result.diskFreeAfter) out.info(`    disk: ${gb(result.diskFreeBefore)} before, ${gb(result.diskFreeAfter)} after`);
-    return result;
+    return done();
   }
   result.exitCode = res.code === 0 ? DEPLOY_FAILED : res.code === 20 ? EXIT.CONFIG : DEPLOY_FAILED;
   result.status = result.rolledBack ? 'ROLLED_BACK' : 'FAILED';
@@ -379,7 +513,7 @@ export async function executeDeploy({ plan, ssh, getRegistry, out, dryRun = fals
   } else {
     out.error({ message: `Deploy failed on ${server.host} (exit ${res.code}).`, fix: res.stderr.trim().split('\n').slice(-2).join(' ') || null });
   }
-  return result;
+  return done();
 }
 
 /**

@@ -14,7 +14,9 @@ Arguments: `$ARGUMENTS`
 1. Work out the inputs:
    - `dir`: the first argument, else the current project folder.
    - If `<dir>/dockeriser.json` lists `images`, build those: `RUN build "<dir>" --json`, adding
-     `--only a,b` for a subset (a local base image they build FROM is added automatically).
+     `--only a,b` for a subset (a local base image they build FROM is added automatically). Images
+     sharing no local base build in parallel (one Cloud Build each); an image's `prebuild` command
+     stages its context first. Don't run several builds yourself from the shell.
    - Otherwise, `image` is the second argument, else the folder name in lowercase (letters, digits,
      `-`, `_`, `.`): `RUN build "<dir>" --image <image> --json`.
    - New project with several images, compose files or a ship script: suggest `/dockeriser:init` first.
@@ -24,8 +26,11 @@ Arguments: `$ARGUMENTS`
    (about 30 minutes). Stdout is one JSON object. `--dry-run` shows what would be uploaded and the
    request, with no network.
 4. Summarise from the JSON:
-   - Success: each `images[].name@digest` (with `image` = its dockeriser.json name), `durationSec`,
-     `buildMinutes` (an 11 second build is about 0.2 minutes) and `usage.line`.
+   - Success: each `images[].name@digest` (with `image` = its dockeriser.json name, and its own
+     `durationSec`), `durationSec`, `buildMinutes` (an 11 second build is about 0.2 minutes) and
+     `usage.line`. Parallel builds add `builds[]`, one result per Cloud Build.
+   - A warning that build args "look like secrets": tell the user; build args are visible in the
+     Cloud Build console.
    - Failure: `status`, `failedStep` (number, name, command), `failureInfo` (type, detail, hint), the
      `errorTail` lines that show the error, `logFile` (the full log) and `consoleUrl`.
    - `status: "ERROR"`: show `error.message` and `error.fix`. Exit 3 means sign-in; use

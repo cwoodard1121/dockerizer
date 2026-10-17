@@ -296,6 +296,33 @@ export function failureInfo(build) {
 }
 
 /**
+ * Seconds each step took, by step id (steps without timing are left out).
+ * @param {object} build
+ * @returns {Record<string, number>}
+ */
+export function stepDurations(build) {
+  const out = {};
+  for (const step of build?.steps || []) {
+    const start = tsSeconds(step.timing?.startTime);
+    const end = tsSeconds(step.timing?.endTime);
+    if (step.id && start !== undefined && end !== undefined) out[step.id] = Math.round(Math.max(0, end - start) * 10) / 10;
+  }
+  return out;
+}
+
+/**
+ * Seconds one image took: its cache pull plus its build step (`build-<name>`, or `build` for a
+ * single-image build when `name` is null). null when the steps have no timing.
+ * @param {Record<string, number>} durations From stepDurations().
+ * @param {string|null} name
+ */
+export function imageDuration(durations, name) {
+  const ids = name ? [`pull-cache-${name}`, `build-${name}`] : ['pull-cache', 'build'];
+  const hits = ids.filter((id) => durations[id] !== undefined);
+  return hits.length ? Math.round(hits.reduce((sum, id) => sum + durations[id], 0) * 10) / 10 : null;
+}
+
+/**
  * Summarise a finished build into the shape printed by --json.
  * @param {object} build Final Build from getBuild.
  * @param {object} ctx

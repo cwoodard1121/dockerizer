@@ -19,7 +19,10 @@ below; it finds the dockeriser folder and runs `npm install` there the first tim
 CLI status --offline --json
 ```
 
-If `ready` is `false`, do NOT fall back to local docker. Use `/dockeriser:setup` (asks for the project in
+If `ready` is `false`, do NOT fall back to local docker. First look at `searched`: dockeriser looks in
+your real profile even when this account's USERPROFILE/HOME points elsewhere, so "not configured" with
+those paths really means nothing is set up (or set DOCKERISER_CONFIG_DIR to the folder that has
+config.json). Use `/dockeriser:setup` (asks for the project in
 chat, then runs the setup script; a browser opens for Google sign-in). Or tell the user to type, in the
 Claude prompt:
 
@@ -46,8 +49,10 @@ CLI build <dir> --image <name>[:<tag>] --json
 - With `--json`, the build log streams to stderr and stdout gets exactly one JSON object. Builds take
   minutes; run it with a long timeout (or in the background) rather than polling.
 - **Projects with several images** (a `dockeriser.json` with `images`): `CLI build <dir> --json` builds
-  them all in one Cloud Build run, in order; `--only a,b` builds a subset (plus any local base they
-  need). No dockeriser.json yet: `/dockeriser:init` detects Dockerfiles, compose files and ship scripts
+  them all: images that build FROM another image's `localTag` share one Cloud Build run, in order (the
+  FROM works unchanged); the rest build in parallel, one Cloud Build each, still one JSON result
+  (`builds[]` lists each). `--only a,b` builds a subset (plus any local base they need);
+  `--sequential` uses one run. An image's `"prebuild"` command stages a script-built context first. No dockeriser.json yet: `/dockeriser:init` detects Dockerfiles, compose files and ship scripts
   and writes one. Build args are visible in the Cloud Build console: public values only, never secrets.
 
 ## 3. Read the result
@@ -57,7 +62,7 @@ CLI build <dir> --image <name>[:<tag>] --json
   "status": "SUCCESS",            // or FAILURE | TIMEOUT | CANCELLED | INTERNAL_ERROR | EXPIRED | ERROR
   "exitCode": 0,
   "buildId": "…",
-  "images": [{ "name": "…/myapp:1.2", "digest": "sha256:…" }],
+  "images": [{ "name": "…/myapp:1.2", "digest": "sha256:…", "durationSec": 70 }],
   "durationSec": 74,
   "buildMinutes": 1.23,
   "consoleUrl": "https://console.cloud.google.com/cloud-build/builds;region=…",
@@ -97,4 +102,5 @@ The build already pushed the image; nothing is pulled to this PC. Its address is
 ## 5. After building
 
 If `usage.percent` is over 80 (or the line says "over by"), tell the user the usage line in one sentence.
-`/dockeriser:usage` gives the full picture.
+`/dockeriser:usage` gives the full picture. Image storage over the free 0.5 GB: the repo keeps the 20
+newest versions of each image; `/dockeriser:cleanup` deletes older ones now (only when asked).

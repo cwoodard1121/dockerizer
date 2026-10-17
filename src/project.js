@@ -6,7 +6,8 @@
  *   "include": [".local/deploy/app-context"],            // uploaded even if an ignore file drops them
  *   "images": [{ "name": "base", "image": "appraiseme-app-base", "dockerfile": "Dockerfile",
  *                "context": ".", "buildArgs": {"REVISION": "${REVISION}"}, "buildArgsFile": ".local/web.env",
- *                "localTag": "appraiseme-app:base", "push": true }],
+ *                "localTag": "appraiseme-app:base", "push": true,
+ *                "prebuild": "node scripts/stage.mjs" }],             // run on this PC before packaging
  *   "deploy": { "server": "prod", "mode": "run|compose|pull", ... }
  * }
  */
@@ -163,6 +164,20 @@ export function resolveBuildArgs(img, { root, env, builtins = {}, cliFileArgs = 
   return [...merged].map(([k, v]) => `${k}=${v}`);
 }
 
+/** Prefixes of values that frameworks bake into client bundles on purpose (public by design). */
+const PUBLIC_PREFIXES = ['NEXT_PUBLIC_*', 'VITE_*', 'PUBLIC_*', 'EXPO_PUBLIC_*', 'REACT_APP_*', 'NUXT_PUBLIC_*'];
+const SECRET_NAME = /SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|API_?KEY|ACCESS_?KEY|(?:^|_)KEY$/i;
+
+/**
+ * Build-arg names that look like secrets. Build args show in the Cloud Build console and the
+ * image history, so these deserve a warning (never a refusal: the heuristic can be wrong).
+ * @param {string[]} kvs KEY=VALUE (or KEY) strings.
+ * @returns {string[]}
+ */
+export function secretLookingArgs(kvs) {
+  return kvs.map((kv) => kv.split('=')[0]).filter((k) => SECRET_NAME.test(k) && !nameMatches(k, PUBLIC_PREFIXES));
+}
+
 /**
  * Validate and normalise the `images` list.
  * @param {unknown} images
@@ -226,7 +241,11 @@ export function normaliseImages(images, root) {
       }
       pushedRepos.set(image, name);
     }
-    return { name, image, dockerfile, context, external, buildArgs, buildArgsFile, buildArgsFromEnv, localTag, push };
+    if (raw.prebuild !== undefined && (typeof raw.prebuild !== 'string' || !raw.prebuild.trim())) {
+      throw new ConfigError(`${where}: "prebuild" must be a command string, e.g. "node scripts/stage-context.mjs".`);
+    }
+    const prebuild = raw.prebuild ? raw.prebuild.trim() : null;
+    return { name, image, dockerfile, context, external, buildArgs, buildArgsFile, buildArgsFromEnv, localTag, push, prebuild };
   });
 }
 
@@ -243,14 +262,13 @@ export function dockerfileBaseRefs(text) {
 }
 
 /**
- * Pick the images to build: all of them, or the `--only` names plus any earlier image whose
- * localTag they build FROM (so `--only app` also builds the base it needs). Keeps file order.
+ * Which earlier images each image builds FROM (through their localTag), by name.
  * @param {ReturnType<typeof normaliseImages>} images
- * @param {string[]|null} only
  * @param {(dockerfile: string) => string} readDockerfile Returns the Dockerfile text ('' if missing).
- * @returns {{selected: typeof images, added: string[]}}
+ * @returns {Map<string, string[]>}
+ * @throws {ConfigError} An image builds FROM one that comes later in the list.
  */
-export function selectImages(images, only, readDockerfile) {
+export function imageDeps(images, readDockerfile) {
   const byTag = new Map(images.filter((i) => i.localTag).map((i) => [i.localTag, i]));
   const deps = new Map();
   images.forEach((img, index) => {
@@ -267,6 +285,42 @@ export function selectImages(images, only, readDockerfile) {
     }
     deps.set(img.name, needs);
   });
+  return deps;
+}
+
+/**
+ * Split the images to build into groups that can run as separate Cloud Builds at the same time:
+ * images linked by a local-base FROM stay together (one build machine holds the local tag), in
+ * file order; groups are ordered by their first image.
+ * @param {Array<{name: string}>} images The selected images, in file order.
+ * @param {Map<string, string[]>} deps From imageDeps().
+ * @returns {Array<typeof images>}
+ */
+export function buildGroups(images, deps) {
+  const parent = new Map(images.map((i) => [i.name, i.name]));
+  const find = (n) => (parent.get(n) === n ? n : find(parent.get(n)));
+  for (const img of images) {
+    for (const d of deps.get(img.name) || []) if (parent.has(d)) parent.set(find(img.name), find(d));
+  }
+  const groups = new Map();
+  for (const img of images) {
+    const root = find(img.name);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(img);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Pick the images to build: all of them, or the `--only` names plus any earlier image whose
+ * localTag they build FROM (so `--only app` also builds the base it needs). Keeps file order.
+ * @param {ReturnType<typeof normaliseImages>} images
+ * @param {string[]|null} only
+ * @param {(dockerfile: string) => string} readDockerfile Returns the Dockerfile text ('' if missing).
+ * @returns {{selected: typeof images, added: string[]}}
+ */
+export function selectImages(images, only, readDockerfile) {
+  const deps = imageDeps(images, readDockerfile);
   if (!only || only.length === 0) return { selected: images, added: [] };
   const names = new Set(images.map((i) => i.name));
   for (const n of only) {
@@ -310,6 +364,9 @@ export function normaliseDeploy(raw) {
   if (raw.composeProject !== undefined) d.composeProject = String(raw.composeProject);
   if (raw.then !== undefined) d.then = String(raw.then);
   if (raw.only !== undefined) d.only = splitList(raw.only);
+  if (raw.imageRefs !== undefined) d.imageRefs = splitList(raw.imageRefs);
+  if (raw.upload !== undefined) d.upload = [].concat(raw.upload).map(String); // "<local>:<server folder>", never split on commas
+  if (raw.keepEnv !== undefined) d.keepEnv = splitList(raw.keepEnv);
   if (raw.images !== undefined) {
     if (!raw.images || typeof raw.images !== 'object' || Array.isArray(raw.images)) {
       throw new ConfigError(`"deploy.images" in ${PROJECT_FILE} must map image names to {"tagAs", "services"}.`);

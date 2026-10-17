@@ -6,7 +6,7 @@
   Signs you in to Google (browser), picks or creates the project, links billing, turns on the APIs,
   creates the image repo, the two storage buckets and the "dockeriser" service account with its
   permissions, sets a budget alert, lets dockeriser sign in as that account (browser, once), saves
-  %USERPROFILE%\.dockeriser\config.json, then runs `dockeriser login` to check everything.
+  .dockeriser\config.json in your real profile (or $env:DOCKERISER_CONFIG_DIR), then runs `dockeriser login` to check everything.
 
   Without -Project it asks which project to use. With -Project it never asks (for scripts and agents).
 
@@ -30,7 +30,9 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$ConfigDir = Join-Path $env:USERPROFILE '.dockeriser'
+# The real profile, not $env:USERPROFILE: Claude Code accounts point that at an account folder,
+# and the CLI looks in the real profile too. DOCKERISER_CONFIG_DIR overrides the whole folder.
+$ConfigDir = if ($env:DOCKERISER_CONFIG_DIR) { $env:DOCKERISER_CONFIG_DIR } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.dockeriser' }
 $ConfigFile = Join-Path $ConfigDir 'config.json'
 $KeyPath = Join-Path $ConfigDir 'key.json'
 $ProjectIdPattern = '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'
@@ -232,18 +234,18 @@ try {
     Write-Ok "created image repo $Region-docker.pkg.dev/$Project/$Repo"
   }
   # A Keep rule alone deletes nothing, so pair it with a Delete rule: anything older than a day
-  # goes, except the 10 newest versions of each image.
+  # goes, except the 20 newest versions of each image.
   $policyFile = Join-Path $env:TEMP 'dockeriser-cleanup-policy.json'
   Write-Utf8File $policyFile @'
 [
-  { "name": "keep-10-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 10 } },
+  { "name": "keep-20-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 20 } },
   { "name": "delete-older-than-1d", "action": { "type": "Delete" }, "condition": { "tagState": "any", "olderThan": "1d" } }
 ]
 '@
   $cleanup = Test-Gcloud artifacts repositories set-cleanup-policies $Repo --location $Region --project $Project --policy $policyFile --no-dry-run --quiet
   Remove-Item $policyFile -Force
   if (-not $cleanup.Ok) { throw 'could not set the image cleanup policy' }
-  Write-Ok 'image cleanup set (keeps the 10 newest versions of each image)'
+  Write-Ok 'image cleanup set (keeps the 20 newest versions of each image)'
 
   # ---------------------------------------------------------------------- 7. buckets
   foreach ($pair in @(@($SrcBucket, 1), @($LogsBucket, 30))) {

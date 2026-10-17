@@ -232,6 +232,7 @@ export function formatUsageReport(u) {
     const a = u.arStorage;
     const over = a.overBytes > 0 ? `, over by ${formatBytes(a.overBytes)} ≈ ${usd(a.estMonthlyUsd)}/month` : '';
     lines.push(`Artifact Registry (${u.repo}): ${formatBytes(a.sizeBytes)} of 0.5 GB free (${a.percentOfFree}%)${over}`);
+    if (a.overBytes > 0) lines.push('  old images: `dockeriser cleanup` keeps the 20 newest versions of each image and deletes the rest (also daily, by the repo policy)');
   } else if (u.arStorageError) {
     lines.push(`Artifact Registry (${u.repo}): size unavailable (${u.arStorageError})`);
   }

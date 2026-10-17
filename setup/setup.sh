@@ -27,7 +27,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_DIR="${USERPROFILE:-$HOME}/.dockeriser"
+# The OS account's real profile, not $HOME/$USERPROFILE (Claude Code accounts point those at an
+# account folder); the CLI looks there too. DOCKERISER_CONFIG_DIR overrides the whole folder.
+REAL_HOME="$(node -p "require('os').userInfo().homedir" 2>/dev/null || true)"
+CONFIG_DIR="${DOCKERISER_CONFIG_DIR:-${REAL_HOME:-${USERPROFILE:-$HOME}}/.dockeriser}"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 KEY_PATH="$CONFIG_DIR/key.json"
 ID_PATTERN='^[a-z][a-z0-9-]{4,28}[a-z0-9]$'
@@ -180,15 +183,15 @@ else
   ok "created image repo $REGION-docker.pkg.dev/$PROJECT/$REPO"
 fi
 # A Keep rule alone deletes nothing, so pair it with a Delete rule: anything older than a day
-# goes, except the 10 newest versions of each image.
+# goes, except the 20 newest versions of each image.
 cat > "$TMP_DIR/cleanup.json" <<'JSON'
 [
-  { "name": "keep-10-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 10 } },
+  { "name": "keep-20-most-recent", "action": { "type": "Keep" }, "mostRecentVersions": { "keepCount": 20 } },
   { "name": "delete-older-than-1d", "action": { "type": "Delete" }, "condition": { "tagState": "any", "olderThan": "1d" } }
 ]
 JSON
 run gcloud artifacts repositories set-cleanup-policies "$REPO" --location "$REGION" --project "$PROJECT" --policy "$TMP_DIR/cleanup.json" --no-dry-run --quiet
-ok "image cleanup set (keeps the 10 newest versions of each image)"
+ok "image cleanup set (keeps the 20 newest versions of each image)"
 
 # ------------------------------------------------------------------------ 7. buckets
 for pair in "$SRC_BUCKET:1" "$LOGS_BUCKET:30"; do

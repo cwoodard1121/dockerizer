@@ -4,10 +4,9 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveConfig, resolveCredentials } from './config.js';
+import { configDir, homeSearch, resolveConfig, resolveCredentials, userHome } from './config.js';
 import { readUsageCache, summaryFromCache } from './usage.js';
 
 /** Root of this dockeriser checkout. */
@@ -46,9 +45,12 @@ export function findGcloud({ env = process.env, platform = process.platform } = 
  * @param {Date} [opts.now]
  * @param {string} [opts.platform]
  * @param {Record<string, string|undefined>} [opts.flags] --project/--region/--repo.
+ * @param {string[]} [opts.searched] Config files looked at (default: every place userHome() tries).
  */
-export function getOfflineStatus({ env = process.env, homeDir = os.homedir(), now = new Date(), platform = process.platform, flags = {} } = {}) {
-  const status = { configured: false, ready: false, cliPath: CLI_PATH, setupScript: SETUP_SCRIPT };
+export function getOfflineStatus({ env = process.env, homeDir, now = new Date(), platform = process.platform, flags = {}, searched } = {}) {
+  if (!searched) searched = homeDir ? [path.join(configDir(homeDir, env), 'config.json')] : homeSearch({ env });
+  if (!homeDir) homeDir = userHome({ env });
+  const status = { configured: false, ready: false, cliPath: CLI_PATH, setupScript: SETUP_SCRIPT, home: homeDir, searched };
   try {
     const cfg = resolveConfig({ flags, env, homeDir, requireProject: false });
     Object.assign(status, {

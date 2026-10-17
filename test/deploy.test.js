@@ -12,6 +12,7 @@ import { deployScript, dkRef, parseMarks, probeScript, logsScript, installPuller
 import { archiveSize, progressText, saveArchiveStream, saveManifest, tarHeader } from '../src/save-tar.js';
 import { pickPlatform, createRegistryClient, MEDIA } from '../src/registry.js';
 import { executeDeploy, planDeploy, parseTagAs, saveDeploySection } from '../src/deploy.js';
+import { parseDeployImage } from '../src/image.js';
 import { tempTree, sink } from './helpers.js';
 import { createOutput } from '../src/output.js';
 
@@ -247,8 +248,12 @@ test('deploy settings: flags beat dockeriser.json; the first deploy saves settin
   assert.equal(plan.run.name, 'web');
   assert.equal(plan.items[0].repository, `${REPO}/web`);
   assert.equal(plan.items[0].tag, 'latest');
-  saveDeploySection(plan);
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'dockeriser.json'), 'utf8'));
+  const where = saveDeploySection(plan, { homeDir: home });
+  assert.equal(where.kind, 'project-state');
+  assert.ok(!fs.existsSync(path.join(dir, 'dockeriser.json')), 'the repo is left alone');
+  const saved = JSON.parse(fs.readFileSync(where.file, 'utf8'));
+  assert.ok(where.file.startsWith(path.join(home, '.dockeriser', 'projects')));
+  assert.equal(saved.root, path.resolve(dir));
   assert.deepEqual(saved.deploy, { server: 'prod', mode: 'run', name: 'web', ports: ['80:3000'], envFile: '.env', healthUrl: 'http://localhost:3000/', image: 'web' });
   assert.ok(!JSON.stringify(saved).includes('hunter2'));
 
@@ -364,4 +369,70 @@ test('deploy dry run prints the script without the env file contents', async () 
   assert.equal(result.status, 'DRY_RUN');
   assert.ok(!result.script.includes(Buffer.from('SECRET=hunter2\n').toString('base64')));
   assert.ok(!result.script.includes('hunter2'));
+});
+
+test('deploy several --image values, paired in order with bare --tag-as values', () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web:v2'], 'tag-as': ['app:demo', 'web:demo'] }, cfg: CFG, homeDir: home, env: {} });
+  assert.deepEqual(plan.items.map((i) => [i.name, i.repository, i.tag, i.tagAs]), [
+    ['app', `${REPO}/app`, 'latest', 'app:demo'],
+    ['web', `${REPO}/web`, 'v2', 'web:demo'],
+  ]);
+  const named = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['web=web:x', 'app=app:x'] }, cfg: CFG, homeDir: home, env: {} });
+  assert.deepEqual(named.items.map((i) => i.tagAs), ['app:x', 'web:x']);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['app:demo'] }, cfg: CFG, homeDir: home, env: {} }), /1 --tag-as value.*2 images/);
+  assert.throws(() => parseTagAs(['app=app:x', 'web:x'], ['app', 'web']), /mix/);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', image: ['app', 'web'] }, cfg: CFG, homeDir: home, env: {} }), /Mode "run" starts one container/);
+  assert.throws(() => planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'app:v2'], 'tag-as': ['a:1', 'a:2'] }, cfg: CFG, homeDir: home, env: {} }), /twice/);
+});
+
+test('deploy by digest: the exact image, no tag lookup', async () => {
+  const { home, dir } = deployFixture(null);
+  const digest = `sha256:${'ab'.repeat(32)}`;
+  assert.deepEqual(parseDeployImage(`web@${digest}`, CFG), { name: 'web', repository: `${REPO}/web`, tag: null, digest });
+  assert.equal(parseDeployImage(`${REPO}/web:v1@${digest}`, CFG).tag, 'v1');
+  assert.deepEqual(parseDeployImage('web', CFG), { name: 'web', repository: `${REPO}/web`, tag: 'latest', digest: null });
+  assert.throws(() => parseDeployImage('web@sha256:abc', CFG), /sha256:<64 hex/);
+  const plan = planDeploy({ dir, flags: { to: 'prod', image: [`web@${digest}`] }, cfg: CFG, homeDir: home, env: {} });
+  assert.equal(plan.items[0].digest, digest);
+  const { o } = out();
+  const result = await executeDeploy({ plan, ssh: { exec: () => assert.fail('no ssh') }, getRegistry: () => assert.fail('a digest needs no lookup'), out: o, dryRun: true });
+  assert.equal(result.digest, digest);
+  assert.match(result.script, new RegExp(`web:dk-${'ab'.repeat(6)}`));
+});
+
+test('per-user deploy settings: rollback and logs reuse them; --save writes dockeriser.json; dockeriser.json wins', () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', mode: 'load-only', image: ['app', 'web'], 'tag-as': ['app:demo', 'web:demo'], then: 'bash /opt/x/setup.sh' }, cfg: CFG, homeDir: home, env: {} });
+  saveDeploySection(plan, { homeDir: home });
+  for (const rollback of [true, false]) {
+    const again = planDeploy({ dir, flags: {}, cfg: CFG, homeDir: home, env: {}, rollback });
+    assert.equal(again.server.host, 'root@203.0.113.5');
+    assert.equal(again.mode, 'load-only');
+    assert.deepEqual(again.items.map((i) => [i.repository, i.tagAs, i.key]), [[`${REPO}/app`, 'app:demo', 'app:demo'], [`${REPO}/web`, 'web:demo', 'web:demo']]);
+    assert.equal(again.then, 'bash /opt/x/setup.sh');
+    assert.equal(again.saveSection, null, 'saved settings are not rewritten');
+  }
+  assert.equal(saveDeploySection(plan, { homeDir: home, where: 'none' }), null);
+  const file = saveDeploySection(plan, { homeDir: home, where: 'file' });
+  assert.equal(file.kind, 'dockeriser.json');
+  const written = JSON.parse(fs.readFileSync(path.join(dir, 'dockeriser.json'), 'utf8'));
+  assert.deepEqual(written.deploy.imageRefs, [`${REPO}/app`, `${REPO}/web`]);
+  // dockeriser.json's own deploy section beats the per-user one.
+  fs.writeFileSync(path.join(dir, 'dockeriser.json'), JSON.stringify({ deploy: { server: 'root@198.51.100.7', mode: 'load-only', image: 'other', images: { other: { tagAs: 'other:x' } } } }));
+  const fromFile = planDeploy({ dir, flags: {}, cfg: CFG, homeDir: home, env: {} });
+  assert.equal(fromFile.server.host, 'root@198.51.100.7');
+  assert.deepEqual(fromFile.items.map((i) => i.name), ['other']);
+});
+
+test('deploy results carry durationSec and per-phase timings', async () => {
+  const { home, dir } = deployFixture(null);
+  const plan = planDeploy({ dir, flags: { to: 'prod', image: 'web' }, cfg: CFG, homeDir: home, env: {} });
+  const ssh = mockSsh({ deployStdout: '@@dk item=0 new="sha256:new"\n@@dk previous=""\n@@dk health=ok\n@@dk result=ok\n' });
+  let clock = 0;
+  const { o } = out();
+  const result = await executeDeploy({ plan, ssh, getRegistry: async () => mockRegistry(), out: o, now: () => (clock += 1000) });
+  assert.equal(typeof result.durationSec, 'number');
+  assert.ok(result.durationSec > 0);
+  for (const k of ['checkSec', 'transferSec', 'uploadSec', 'scriptSec']) assert.equal(typeof result.timings[k], 'number', k);
 });

@@ -6,9 +6,9 @@
 
 import { spawn as realSpawn } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { AuthError, ConfigError, DockeriserError } from './errors.js';
+import { userHome } from './config.js';
 
 /** Quote a value for a POSIX shell (single quotes, safe for any content). */
 export function shq(value) {
@@ -26,7 +26,7 @@ export function defaultSshPath({ platform = process.platform, env = process.env,
 }
 
 /** Expand a leading ~ in a key path. */
-export function expandHome(p, homeDir = os.homedir()) {
+export function expandHome(p, homeDir = userHome()) {
   if (!p) return p;
   return p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? path.join(homeDir, p.slice(2)) : p;
 }

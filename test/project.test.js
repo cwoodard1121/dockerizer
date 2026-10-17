@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as tar from 'tar';
-import { loadProject, normaliseImages, resolveBuildArgs, selectImages } from '../src/project.js';
+import { buildGroups, imageDeps, loadProject, normaliseImages, resolveBuildArgs, secretLookingArgs, selectImages } from '../src/project.js';
 import { listUploadFiles, packageSource, removeTarball } from '../src/package-source.js';
 import { dockerMatcher } from '../src/dockerignore.js';
 import { buildRequestMulti } from '../src/build.js';
@@ -152,4 +152,28 @@ test('init: finds compose services, Dockerfiles, public build args and a docker 
   assert.deepEqual(config.deploy.images, { api: { tagAs: 'myapp-api:prod' }, web: { tagAs: 'myapp-web:prod' } });
   assert.match(shipScripts[0].suggestion, /--mode load-only --tag-as api=myapp-api:prod --tag-as web=myapp-web:prod --then/);
   assert.ok(!JSON.stringify(config).match(/\d+\.\d+\.\d+\.\d+/), 'no hosts invented');
+});
+
+test('secret-looking build-arg names are flagged; public client prefixes are not', () => {
+  assert.deepEqual(secretLookingArgs(['API_TOKEN=x', 'NEXT_PUBLIC_KEY=y', 'DB_PASSWORD=z', 'REVISION=1', 'STRIPE_SECRET_KEY=s', 'VITE_API_KEY=v', 'AWS_ACCESS_KEY_ID=a', 'SIGNING_KEY']), ['API_TOKEN', 'DB_PASSWORD', 'STRIPE_SECRET_KEY', 'AWS_ACCESS_KEY_ID', 'SIGNING_KEY']);
+});
+
+test('"prebuild" must be a non-empty command string', () => {
+  const root = tempTree({ Dockerfile: 'FROM alpine\n' });
+  assert.equal(normaliseImages([{ name: 'a', prebuild: 'npm run stage' }], root)[0].prebuild, 'npm run stage');
+  assert.equal(normaliseImages([{ name: 'a' }], root)[0].prebuild, null);
+  assert.throws(() => normaliseImages([{ name: 'a', prebuild: ['x'] }], root), /"prebuild" must be a command/);
+});
+
+test('buildGroups: images joined by a local-base FROM stay in one build; the rest build alone', () => {
+  const root = tempTree({
+    Dockerfile: 'FROM node:22\n',
+    'app/Dockerfile': 'FROM app:base\n',
+    'web/Dockerfile': 'FROM node:22\n',
+    'proxy/Dockerfile': 'FROM caddy\n',
+  });
+  const images = normaliseImages([{ name: 'base', localTag: 'app:base' }, { name: 'web', context: 'web' }, { name: 'app', context: 'app' }, { name: 'proxy', context: 'proxy' }], root);
+  const deps = imageDeps(images, (df) => fs.readFileSync(path.join(root, df), 'utf8'));
+  assert.deepEqual(buildGroups(images, deps).map((g) => g.map((i) => i.name)), [['base', 'app'], ['web'], ['proxy']]);
+  assert.deepEqual(buildGroups(images.slice(1), deps).map((g) => g.map((i) => i.name)), [['web'], ['app'], ['proxy']], 'a base that is not selected does not group');
 });
