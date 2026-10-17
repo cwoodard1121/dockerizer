@@ -43,3 +43,7 @@ export const CI_MONTHLY_CAP_USD = 5;
 
 /** From this day of the month, a pace that projects past the cap by month end also turns CI off. */
 export const CI_PACE_FROM_DAY = 7;
+
+/** Any day: once this much is spent, a pace past CI_RUNAWAY_FACTOR x the cap turns CI off (a loop, not use). */
+export const CI_RUNAWAY_MIN_SPENT_USD = 1;
+export const CI_RUNAWAY_FACTOR = 3;

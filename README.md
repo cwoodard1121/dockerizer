@@ -228,7 +228,7 @@ the 40 GB disk and its IP that is about $0.039/hour, so a 45-minute gate costs a
 **The cap.** Every run's estimated cost goes into one ledger per month in your logs bucket, shared by
 every PC and account. CI turns itself off for the rest of the month when the month's spend reaches
 **$5**, the same as the budget alert setup creates and about 160 full gates. From **day 7** it also turns off when the
-pace so far would pass $5 by month end. While it is off, `dockeriser ci` exits 5 and agents run
+pace so far would pass $5 by month end, and on any day once $1 is spent and the pace would pass $15 (a runaway loop). While it is off, `dockeriser ci` exits 5 and agents run
 their gates locally. The figure is hard-coded in `src/pricing.js`. `dockeriser ci enable` (the owner's override, never
 for agents) lifts only the pace check for the rest of the month. The $5 stop has no override.
 

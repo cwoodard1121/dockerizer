@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configDir } from './config.js';
-import { CI_MONTHLY_CAP_USD, CI_PACE_FROM_DAY } from './pricing.js';
+import { CI_MONTHLY_CAP_USD, CI_PACE_FROM_DAY, CI_RUNAWAY_FACTOR, CI_RUNAWAY_MIN_SPENT_USD } from './pricing.js';
 import { monthRange } from './usage.js';
 import { sleep as realSleep } from './logs.js';
 
@@ -48,6 +48,10 @@ export function evaluateCap(ledger, now) {
   if (ledger.disabled) return { ok: false, reason: ledger.disabled.reason, ...base };
   if (spent >= CI_MONTHLY_CAP_USD) {
     return { ok: false, reason: `${money(spent)} spent, the ${money(CI_MONTHLY_CAP_USD)} monthly cap`, ...base };
+  }
+  // Runaway: before the pace check starts, a pace past 3x the cap (once $1 is spent) is a loop, not use.
+  if (!ledger.override && spent >= CI_RUNAWAY_MIN_SPENT_USD && projected > CI_MONTHLY_CAP_USD * CI_RUNAWAY_FACTOR) {
+    return { ok: false, reason: `runaway pace: ${money(projected)} by month end, over ${CI_RUNAWAY_FACTOR}x the ${money(CI_MONTHLY_CAP_USD)} monthly cap`, ...base };
   }
   if (!ledger.override && now.getUTCDate() >= CI_PACE_FROM_DAY && projected > CI_MONTHLY_CAP_USD) {
     return { ok: false, reason: `on pace for ${money(projected)} by month end, over the ${money(CI_MONTHLY_CAP_USD)} monthly cap`, ...base };

@@ -73,7 +73,7 @@ export async function buildContext({ pluginRoot, env = process.env, homeDir }) {
   }
   const usage = s.usage?.line ? ` ${s.usage.line}` : '';
   const ci = s.ci?.line ? ` ${s.ci.line}.` : '';
-  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json, or /dockeriser:build). Deploy only when the user asks.${usage} Heavy test gates (full check, integration, e2e): node "${cli}" ci <dir> --json (or /dockeriser:ci) runs the "ci" steps of dockeriser.json on a cloud VM instead of this PC, about 3 cents a run.${ci}${install}`;
+  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json, or /dockeriser:build). Deploy only when the user asks.${usage} Heavy test gates (full check, integration, e2e) run locally by default; only when this PC is short on memory (under ~6 GB free) or another stack already holds the gate's ports, run node "${cli}" ci <dir> --json (or /dockeriser:ci) to run the "ci" steps of dockeriser.json on a cloud VM, about 3 cents a run.${ci}${install}`;
 }
 
 async function main() {
