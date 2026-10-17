@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configDir, homeSearch, resolveConfig, resolveCredentials, userHome } from './config.js';
 import { readUsageCache, summaryFromCache } from './usage.js';
+import { readCiCache, summaryFromCiCache } from './ci-ledger.js';
 
 /** Root of this dockeriser checkout. */
 export const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -73,6 +74,7 @@ export function getOfflineStatus({ env = process.env, homeDir, now = new Date(),
   const gcloud = findGcloud({ env, platform });
   status.gcloud = { installed: Boolean(gcloud), path: gcloud };
   status.usage = summaryFromCache(readUsageCache(homeDir), { now, project: status.project || undefined });
+  status.ci = summaryFromCiCache(readCiCache(homeDir, env), now);
   status.ready = status.configured && status.credentials.present;
   return status;
 }

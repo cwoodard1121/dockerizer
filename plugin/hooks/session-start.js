@@ -72,7 +72,8 @@ export async function buildContext({ pluginRoot, env = process.env, homeDir }) {
     ].join('\n') + install;
   }
   const usage = s.usage?.line ? ` ${s.usage.line}` : '';
-  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json, or /dockeriser:build). Deploy only when the user asks.${usage}${install}`;
+  const ci = s.ci?.line ? ` ${s.ci.line}.` : '';
+  return `Docker builds: use dockeriser, not local docker build (node "${cli}" build <dir> --image <name> --json, or /dockeriser:build). Deploy only when the user asks.${usage} Heavy test gates (full check, integration, e2e): node "${cli}" ci <dir> --json (or /dockeriser:ci) runs the "ci" steps of dockeriser.json on a cloud VM instead of this PC, about 3 cents a run.${ci}${install}`;
 }
 
 async function main() {

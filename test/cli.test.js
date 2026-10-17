@@ -215,8 +215,10 @@ test('session-start hook: one line with the usage when configured', async () => 
     JSON.stringify({ version: 1, month: new Date().toISOString().slice(0, 7), project: 'demo-proj', region: 'northamerica-northeast2', seconds: 600, otherSeconds: 0, builds: 1, countedIds: [], partial: false }),
   );
   const text = await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env, homeDir: home });
-  assert.match(text, /^Docker builds: use dockeriser, not local docker build \(node ".*bin\/dockeriser\.js" build <dir> --image <name> --json, or \/dockeriser:build\)\. Deploy only when the user asks\. Cloud Build: 10 \/ 2,500 free min this month \(0%\)$/);
+  assert.match(text, /^Docker builds: use dockeriser, not local docker build \(node ".*bin\/dockeriser\.js" build <dir> --image <name> --json, or \/dockeriser:build\)\. Deploy only when the user asks\. Cloud Build: 10 \/ 2,500 free min this month \(0%\) Heavy test gates \(full check, integration, e2e\): node ".*bin\/dockeriser\.js" ci <dir> --json \(or \/dockeriser:ci\) runs the "ci" steps of dockeriser\.json on a cloud VM instead of this PC, about 3 cents a run\.$/);
   assert.equal(text.includes('\n'), false);
+  fs.writeFileSync(path.join(home, '.dockeriser', 'ci-cache.json'), JSON.stringify({ month: new Date().toISOString().slice(0, 7), spentUsd: 0.41, capUsd: 5, runs: 2, disabled: null }));
+  assert.match(await buildContext({ pluginRoot: path.join(REPO, 'plugin'), env, homeDir: home }), / CI: \$0\.41 \/ \$5\.00 this month \(2 runs\)\.$/);
 });
 
 test('unknown commands and flags exit 2', async () => {

@@ -9,7 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = path.join(ROOT, 'plugin', 'skills');
 
 test('every slash command has a skill whose name matches its folder and that uses the launcher', () => {
-  const want = ['init', 'build', 'deploy', 'server', 'rollback', 'logs', 'cleanup', 'setup', 'doctor', 'status', 'usage', 'login'];
+  const want = ['ci', 'init', 'build', 'deploy', 'server', 'rollback', 'logs', 'cleanup', 'setup', 'doctor', 'status', 'usage', 'login'];
   for (const name of want) {
     const text = fs.readFileSync(path.join(SKILLS, name, 'SKILL.md'), 'utf8');
     const front = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);

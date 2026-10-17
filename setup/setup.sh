@@ -156,7 +156,7 @@ fi
 
 # ------------------------------------------------------------------------ 4. APIs
 APIS=(cloudbuild.googleapis.com artifactregistry.googleapis.com storage.googleapis.com iam.googleapis.com
-      iamcredentials.googleapis.com logging.googleapis.com serviceusage.googleapis.com billingbudgets.googleapis.com)
+      iamcredentials.googleapis.com logging.googleapis.com serviceusage.googleapis.com billingbudgets.googleapis.com compute.googleapis.com)
 ENABLED="$(probe gcloud services list --enabled --project "$PROJECT" --format='value(config.name)')"
 MISSING=()
 for api in "${APIS[@]}"; do grep -qxF "$api" <<<"$ENABLED" || MISSING+=("$api"); done

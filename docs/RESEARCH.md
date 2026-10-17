@@ -157,6 +157,24 @@ target was built.
   `package`, `version` (the digest), `tags` (a list), `createTime`, `metadata.imageSizeBytes`.
   Image sizes overlap (shared layers), so "bytes freed" is an upper bound.
 
+## 7. CI on spot VMs (checked 2026-10-16)
+
+- **Prices** from the Cloud Billing catalogue API (Compute Engine, service `6F81-5844-456A`, `skus` list,
+  effective 2026-10-16T07:00Z), Toronto: "Spot Preemptible E2 Instance Core" $0.005/h, "Spot
+  Preemptible E2 Instance Ram" $0.000668/GiB-h (on demand: $0.024013 and $0.003218), "Balanced PD
+  Capacity" $0.11/GiB-month, "External IP Charge on a Spot Preemptible VM" $0.0025/h (global SKU). So
+  e2-standard-4 spot = $0.030688/h; with 40 GiB balanced disk and the IP, $0.0392/h.
+- **Quota** in `freebuilds`, northamerica-northeast2: `E2_CPUS` 24, `CPUS` 100,
+  `PREEMPTIBLE_CPUS` 0 (spot VMs then count against the normal CPU quota), `IN_USE_ADDRESSES` 8. Hence at most 4
+  e2-standard-4 CI VMs at once.
+- **gcloud 589**: `compute instances create` takes `--provisioning-model=SPOT`,
+  `--instance-termination-action=DELETE` (applies on preemption *and* on automatic termination) and
+  `--max-run-duration` ("relative to the last time when the VM began running"). A guest
+  `shutdown -h` only stops the VM (status TERMINATED; the disk is still billed), so dockeriser deletes it.
+  Image family `ubuntu-2404-lts-amd64` in `ubuntu-os-cloud` (10 GB image).
+- **Ubuntu 24.04 packages** `docker.io` and `docker-compose-v2` give `docker compose` without the
+  get.docker.com script.
+
 ## Deviations from the original design (and why)
 
 1. **Logs bucket gets `roles/storage.admin`, not `storage.objectAdmin`.** The logs page names Storage
