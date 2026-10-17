@@ -45,17 +45,21 @@ Usage:
   dockeriser server add <name> --host <user@host> [--port 22] [--key <path>] [--transfer ssh|pull] [--install-docker]
   dockeriser server list | check <name> | remove <name>
   dockeriser init [dir] [--force]                           write a starter dockeriser.json for a project
+  dockeriser cleanup [--keep 20] [--dry-run]                keep the newest N versions of each image, delete the rest
   dockeriser login                       say what (if anything) is left to sign in
   dockeriser usage [--month YYYY-MM]     free build-minutes used this month, projection, cost
   dockeriser status --offline            instant local check (no network): set up? credentials? usage
   dockeriser doctor                      check every piece of setup online, with fixes
   dockeriser --help | --version
-  (every command takes --json; --project, --region, --repo override the config)
+  (every command takes --json; --project, --region, --repo override the config;
+   DOCKERISER_CONFIG_DIR points at another .dockeriser folder)
 
 Build options:
   -i, --image <ref>        myapp[:tag] (pushed to <region>-docker.pkg.dev/<project>/<repo>/myapp)
                            or a full <region>-docker.pkg.dev/... reference. Without it, dockeriser.json is used.
       --only <names>       with dockeriser.json: build only these images (and any local base they need)
+      --sequential         with dockeriser.json: one Cloud Build run (default: images sharing no local
+                           base build in parallel, one Cloud Build each)
   -t, --tag <tag>          extra tag (repeatable). :latest is always pushed too.
                            Default tag: short git SHA if <dir> is clean in git, else UTC YYYYMMDD-HHMMSS
   -f, --dockerfile <path>  Dockerfile relative to <dir> (default: Dockerfile)
@@ -68,12 +72,14 @@ Build options:
       --json               print one JSON result on stdout (logs and messages go to stderr)
       --debug              show stack traces
 
-Deploy options (flags win over the "deploy" section of dockeriser.json, which the first deploy writes):
+Deploy options (flags win over dockeriser.json's "deploy" section, which wins over the settings the
+first deploy saves in ~/.dockeriser/projects/):
       --to <server>        saved server name or user@host
       --mode <mode>        run (default: one container) | compose | load-only
       --transfer <how>     ssh (default: stream through this PC, nothing on the server) | pull (server pulls)
       --build              build first, then deploy the exact digests
-      --image <name>       image to deploy (default: the images in dockeriser.json, at :latest)
+      --image <ref>        image to deploy, repeatable: name[:tag] or name@sha256:<digest> (default: the
+                           images in dockeriser.json, at :latest)
       --name <container>   run mode: container name (default: image name)
   -p, --publish <h:c>      run mode: port mapping, repeatable (e.g. -p 80:3000)
       --env-file <file>    run mode: .env file copied to the server (600), never stored in dockeriser.json
@@ -81,11 +87,17 @@ Deploy options (flags win over the "deploy" section of dockeriser.json, which th
       --compose-dir <dir>  compose mode: folder on the server with the compose file
       --compose-file <f>   compose mode: compose file name; --compose-project <p>: project name
       --service <names>    compose mode: services to restart (repeatable or comma list)
-      --tag-as <ref>       local name for the image on the server, e.g. myapp-web:prod (or image=ref)
-      --then "<command>"   run this on the server after the images are in place
+      --tag-as <ref>       local name for the image on the server, e.g. myapp-web:prod (or image=ref);
+                           with several --image, one bare value each, in the same order
+      --upload <l>:<r>     send a local folder or file to a server folder first, repeatable (one ssh
+                           connection; not undone by rollback)
+      --keep-env <keys>    keep these lines of the server's <folder>/.env when --upload replaces it
+      --then "<command>"   run this on the server after the images (and uploads) are in place
+      --save | --no-save   write the settings into dockeriser.json | keep nothing (default: per user)
       --dry-run            print the remote script; no connection
 Server options: --host, --port, --key (default: "sshKey" in ~/.dockeriser/config.json), --transfer, --install-docker
 Logs options: --follow, --tail <n> (default 100)
+Cleanup options: --keep <n> (default 20), --dry-run (show what would go; change nothing)
 
 Exit codes: 0 success, 1 build or deploy failed, 2 config/input error, 3 credentials/permission error,
             4 upload error, 130 interrupted (build cancelled).`;

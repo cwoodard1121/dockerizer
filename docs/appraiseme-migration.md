@@ -132,3 +132,21 @@ Then check on the droplet with `docker image ls appraiseme-proxy`. It should be 
 - **Disk.** After each successful deploy, dockeriser keeps the current and previous image of each one,
   and removes older images that it loaded itself. It never touches images it didn't load, such as the
   ones from the old `docker load` path.
+
+## 6. Since dockeriser 0.4.0: the rest of ship.sh in the same command
+
+The 2026-10-16 ship found the gaps that forced manual steps; they are closed:
+
+- **Any Claude account.** dockeriser finds `C:\Users\<you>\.dockeriser` even when the account sets
+  `USERPROFILE` to `C:\Users\<you>\.claude-appraiseme`. No more overriding `USERPROFILE`/`HOME`.
+- **Staged app context.** Put the staging command in the `app` image as `"prebuild"` (it runs in the
+  repo root before packaging, and only when `app` is built). `base` and `app` then build in one Cloud
+  Build run (the `FROM appraiseme-app:base` works unchanged), while `web` and `proxy` build in parallel.
+- **Clean checkout.** Deploy settings are saved in `~\.dockeriser\projects\`, not in the repo. Commit a
+  `deploy` section in `dockeriser.json` if you want them shared; it wins.
+- **Bundle and pins.** `--upload .local/deploy/bundle:/opt/appraiseme` replaces the tar-over-ssh step
+  (still one SSH connection), and `--keep-env WEB_IMAGE,PROXY_IMAGE` keeps the release pins of the
+  images a partial ship doesn't load, as ship.sh's `keep=` does. Then `--then "cd /opt/appraiseme &&
+  bash setup.sh"`. Connections: look, load, upload, finish = 4, under the droplet's limit of 6 in 30 s.
+- **Pinning.** `deploy --image appraiseme-web@sha256:<digest>` deploys an exact image; `--image` repeats,
+  with one `--tag-as` per image in order.

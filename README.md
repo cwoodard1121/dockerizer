@@ -40,6 +40,7 @@ After the plugin is installed (see [Claude Code plugin](#claude-code-plugin)):
 | `/dockeriser:server [add\|list\|check]` | Saves a server (asks for the host in chat), lists them, or checks SSH and Docker on one. |
 | `/dockeriser:rollback [dir]` | Goes back to the previous image(s) on the server. |
 | `/dockeriser:logs [dir]` | The deployed container's logs, over SSH. |
+| `/dockeriser:cleanup` | Deletes old images from the registry, keeping the 20 newest versions of each (shows what would go first), and sets the daily cleanup policy to match. |
 | `/dockeriser:setup [project-id]` | Asks in chat which Google Cloud project to use (lists yours, or offers to create one), then runs the setup script. |
 | `/dockeriser:doctor` | Online check of every piece of setup; explains each failure and its fix. |
 | `/dockeriser:status` | Instant local check (no network): set up or not, and this month's usage line. |
@@ -53,7 +54,7 @@ first time.
 
 - Signs you in to Google in your browser (only if you aren't already).
 - Uses the project you pick, or creates a new one, and links your billing account (needed even for the free tier).
-- Turns on the Google services dockeriser needs and makes a private place for images and build files, with old files cleaned up automatically.
+- Turns on the Google services dockeriser needs and makes a private place for images and build files, with old files cleaned up automatically (the 20 newest versions of each image are kept).
 - Creates a `dockeriser` account with only the permissions builds need.
 - Sets a $5/month budget alert so you get an email before any surprise (`-Budget 10` to change).
 - Lets dockeriser sign in as that account (one more browser sign-in, no password files).
@@ -65,8 +66,13 @@ permissions list: [docs/SETUP.md](docs/SETUP.md).
 ## Projects with several images (`dockeriser.json`)
 
 Put a `dockeriser.json` next to your code, or run `dockeriser init` (`/dockeriser:init`) to write a
-starter one. `dockeriser build` with no `--image` then builds every image in it, **in one Cloud Build
-run, in order**. `--only a,b` builds a subset, plus any local base image they need.
+starter one. `dockeriser build` with no `--image` then builds every image in it. `--only a,b` builds a
+subset, plus any local base image they need.
+
+- Images that build `FROM` another image's `localTag` go **in one Cloud Build run, in order**, so that
+  `FROM` works unchanged; nothing is rewritten.
+- Images that share no local base build **at the same time**, each as its own Cloud Build on its own
+  machine, from one upload. `--sequential` (or `"parallel": false`) puts everything in one run.
 
 ```json
 {
@@ -90,11 +96,13 @@ run, in order**. `--only a,b` builds a subset, plus any local base image they ne
 | `buildArgs` | `{"KEY": "value"}`. `${VAR}` and `$VAR` come from your environment; `${git.sha}` and `${git.short}` come from git |
 | `buildArgsFile` | A KEY=VALUE file read on your PC (e.g. `.env`) |
 | `buildArgsFromEnv` | Name patterns such as `["NEXT_PUBLIC_*", "VITE_*"]`. Only matching keys from `buildArgsFile` (or your environment) are sent, never the whole .env |
+| `prebuild` | A command run on your PC, in the project folder, before packaging (e.g. `"node scripts/stage-app-context.mjs"`), for a context a script assembles. Runs on `--dry-run` too; a failure stops the build |
 
 Top-level fields:
 - `include`: extra files or folders to upload, even if an ignore file or a gitignored parent folder
   leaves them out.
 - `source: "git"`: upload only files tracked by git.
+- `parallel: false`: build every image in one Cloud Build run.
 - `deploy`: see [Deploy to a server](#deploy-to-a-server).
 
 **What gets uploaded:**
@@ -105,7 +113,8 @@ Top-level fields:
 - A staged context under a gitignored folder (like `.local/`) is still sent. `.git/` never is.
 
 **Build args are visible in the Cloud Build console**, so use them only for public values such as
-`NEXT_PUBLIC_*`, never secrets. Examples for common setups are in [docs/examples/](docs/examples/).
+`NEXT_PUBLIC_*`, never secrets. dockeriser warns when a build-arg name looks like a secret (`*_TOKEN`,
+`*_PASSWORD`, `*_SECRET*`, `*_KEY`, …, but not `NEXT_PUBLIC_*`, `VITE_*` or other public prefixes). Examples for common setups are in [docs/examples/](docs/examples/).
 
 ## Deploy to a server
 
@@ -118,14 +127,22 @@ with Docker. **It only deploys when you run `deploy`.** Building never deploys b
    dockeriser server add prod --host root@203.0.113.10 --key ~/.ssh/id_ed25519
    ```
    - If all your servers use one key, put `"sshKey": "~/.ssh/id_ed25519"` in
-     `%USERPROFILE%\.dockeriser\config.json` and leave out `--key`.
+     `~\.dockeriser\config.json` and leave out `--key`.
    - Hosts from `~/.ssh/config` work too, and `--to` also takes a raw `user@host`.
-2. Deploy. The first time, pass the settings. They are saved in `dockeriser.json`, but your .env
-   contents never are.
+2. Deploy. The first time, pass the settings. They are saved for this folder in
+   `~\.dockeriser\projects\`, not in the repo, so the checkout stays clean. `--save` writes them into
+   `dockeriser.json` instead (to commit them); `--no-save` keeps nothing. A `deploy` section in
+   `dockeriser.json` wins over the saved one. Your .env contents are never saved.
    ```
    dockeriser deploy --to prod --image web -p 80:3000 --env-file .env --health-url http://localhost:3000/health
    ```
 3. After that, `dockeriser deploy --build` builds and ships in one go, using the exact digests just built.
+
+**Picking images.** Without `--image`, the images in `dockeriser.json` are deployed at `:latest`.
+- `--image` repeats: `--image app --image web --tag-as app:demo --tag-as web:demo` pairs the bare
+  `--tag-as` values with the images in order (or use `--tag-as web=web:demo`).
+- `--image web@sha256:<digest>` deploys that exact image, with no tag lookup.
+- `deploy --build --image app --image web` builds those `dockeriser.json` images and deploys their digests.
 
 **Modes:**
 - **`run`** (default): one container with `--restart unless-stopped`. It must still be running after
@@ -140,6 +157,19 @@ with Docker. **It only deploys when you run `deploy`.** Building never deploys b
   (`--tag-as web=myapp-web:prod`), then stops, or runs `--then "cd /opt/app && bash remote.sh"`. This is
   for projects that already have their own remote script: their `docker save | gzip | ssh docker load`
   line becomes one `dockeriser deploy --mode load-only` command.
+
+**Config files.** `--upload <local folder or file>:<server folder>` (repeatable) sends files from the
+project before the deploy script and `--then`, all in one tar stream over one extra SSH connection.
+They are unpacked into a temp folder first, so a broken stream changes nothing; then copied into place
+(with sudo when the SSH user has it). `--keep-env APP_IMAGE,WEB_IMAGE` keeps those lines of the
+server's existing `<server folder>/.env` when the upload brings a new `.env`, such as image pins a
+release wrote there. Uploaded files are not rolled back by `dockeriser rollback`.
+
+A whole ship script then becomes one command:
+```
+dockeriser deploy --to prod --mode load-only --tag-as app=app:demo --tag-as web=web:demo \
+  --upload .local/deploy/bundle:/opt/app --keep-env APP_IMAGE,WEB_IMAGE --then "cd /opt/app && bash setup.sh"
+```
 
 **How the image gets there.** Two transfers:
 - **`ssh`** (default): no setup and no secrets on the server, but every deploy uploads through your
@@ -159,7 +189,7 @@ In detail:
 - prints free disk before and after.
 
 `dockeriser rollback` goes back to the previous image, and `dockeriser logs [--follow]` shows the
-container logs.
+container logs. Both use the settings the first deploy saved.
 
 **Costs.** Images leaving Google for a server outside Google count as internet egress. The first 1 GiB a
 month is free, then it's about $0.12/GiB in North America.
@@ -190,6 +220,19 @@ node bin\dockeriser.js usage
 Or in Claude Code: `/dockeriser:usage`. Shows how many of the 2,500 free minutes you've used this month,
 where you're heading by month end, and any estimated cost.
 
+### Old images
+
+The image repo keeps the **20 newest versions of each image**; Artifact Registry deletes older ones
+about once a day. To delete them now (and set that policy on a repo made by an older setup):
+
+```
+dockeriser cleanup --dry-run     # what would go, per image
+dockeriser cleanup               # delete it; --keep N for another number
+```
+
+The version tagged `latest` is never deleted. It runs gcloud as you (the project owner), so the
+`dockeriser` build account cannot delete images. Servers keep their own copies, so rollbacks still work.
+
 ## Commands
 
 ```
@@ -198,6 +241,7 @@ dockeriser build [dir] [--only a,b]    the images in dockeriser.json (--build-ar
 dockeriser init [dir] [--force]        write a starter dockeriser.json (detects Dockerfiles, compose, ship scripts)
 dockeriser deploy [dir] --to <server>  see "Deploy to a server"; --dry-run prints the remote script
 dockeriser rollback [dir] | logs [dir] [--follow]
+dockeriser cleanup [--keep 20] [--dry-run]   keep the newest N versions of each image, delete the rest
 dockeriser server add <name> --host <user@host> [--port] [--key] [--transfer ssh|pull] [--install-docker]
 dockeriser server list | check <name> | remove <name>
 dockeriser login                       next sign-in step(s), if any
@@ -217,16 +261,22 @@ dockeriser doctor                      online check of every piece of setup, wit
 | `--build-arg K=V` | passed to `docker build`, repeatable |
 | `--timeout` | `20m` (default), `1h`, `90s`, `1h30m` |
 | `--no-cache` | skip the registry cache (`--cache-from <image>:latest` is used otherwise) |
+| `--sequential` | with dockeriser.json: one Cloud Build run instead of parallel builds |
 | `--dry-run` | package locally and print the Cloud Build request; no network |
 | `--json` | one JSON object on stdout; logs and messages go to stderr |
 | `--project`, `--region`, `--repo` | override config |
 | `--debug` | show stack traces |
 
 Settings come from flags, then env (`DOCKERISER_PROJECT`, `DOCKERISER_REGION`, `DOCKERISER_REPO`,
-`DOCKERISER_SERVICE_ACCOUNT`), then `%USERPROFILE%\.dockeriser\config.json`. Defaults: region
+`DOCKERISER_SERVICE_ACCOUNT`), then `~\.dockeriser\config.json`.
+
+`~` is your Windows account's own profile folder (`C:\Users\<you>`), found even when `USERPROFILE` or
+`HOME` points somewhere else, as it does in Claude Code accounts (`C:\Users\<you>\.claude-work`):
+dockeriser uses the first of the two that has `.dockeriser\config.json`, and `status` lists every path
+it looked in. `DOCKERISER_CONFIG_DIR` points at a different `.dockeriser` folder. Defaults: region
 `northamerica-northeast2`, repo `docker-images`, service account `dockeriser@<project>.iam.gserviceaccount.com`.
 
-Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else `%USERPROFILE%\.dockeriser\key.json`, else gcloud's
+Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else `~\.dockeriser\key.json`, else gcloud's
 application-default login (ideally with `--impersonate-service-account`). On a Google Cloud VM with no
 file, set `METADATA_SERVER_DETECTION=assume-present`.
 
@@ -252,7 +302,7 @@ Dockerfile is always included.
   "status": "SUCCESS",          // FAILURE | TIMEOUT | CANCELLED | INTERNAL_ERROR | EXPIRED | ERROR
   "exitCode": 0,
   "buildId": "8c1d…",
-  "images": [{ "name": "northamerica-northeast2-docker.pkg.dev/p/docker-images/hello:v1", "digest": "sha256:…" }],
+  "images": [{ "name": "northamerica-northeast2-docker.pkg.dev/p/docker-images/hello:v1", "digest": "sha256:…", "durationSec": 70 }],
   "durationSec": 74,
   "buildMinutes": 1.23,         // billed per second
   "consoleUrl": "https://console.cloud.google.com/cloud-build/builds;region=…/8c1d…?project=p",
@@ -265,21 +315,33 @@ Dockerfile is always included.
 }
 ```
 
+When dockeriser.json images build in parallel, the result is still one object: `status` is the first
+non-SUCCESS one, `buildId`/`consoleUrl`/`logFile`/`failedStep`/`errorTail` describe the first failed
+build (else the first), `images` lists every image, `durationSec` is wall-clock, `buildMinutes` the
+sum, plus `parallel: true` and `builds` (each build's own result). `images[].durationSec` is that
+image's cache pull plus build step. A parallel `--dry-run --json` returns `builds` (image names per
+build) and `requests` instead of `request`.
+
 `deploy --json` / `rollback --json` return `status` (SUCCESS, ROLLED_BACK, FAILED), `exitCode`,
 `server`, `mode`, `transfer`, `container`, `image`, `digest`, `previousDigest`, `rolledBack`, `logsTail`
 (last container log lines on failure), `items` (one per image: `name`, `digest`, `tagAs`, `transferred`,
-`imageId`, `previousImageId`), `transferredBytes`, `diskFreeBefore` and `diskFreeAfter` (KB), and `then`.
+`imageId`, `previousImageId`), `transferredBytes`, `diskFreeBefore` and `diskFreeAfter` (KB), `then`,
+`uploads` (`from`, `to`, `files`, `bytes`, `keptEnv`), `durationSec`, `timings` (`checkSec`,
+`transferSec`, `uploadSec`, `scriptSec`) and `saved` (`project-state`, `dockeriser.json` or null).
 `build --deploy` adds the deploy result under `deploy`.
+
+`cleanup --json` returns `keep`, `repository`, `policy` (`set` or `unchanged`), `images` (`name`,
+`versions`, `kept`, `deleting`, `bytes`), `deleted`, `wouldDelete` (dry run) and `bytesFreedUpTo`.
 
 `usage --json` returns `minutesUsed`, `minutesLeft`, `percent`, `builds`, `avgMinutesPerBuild`,
 `minutesPerDay`, `projectedMinutes`, `crossDate`, `overageMinutes`, `costSoFarUsd`, `projectedCostUsd`,
 `arStorage` and `billingUrl`. `status --offline --json` returns `configured`, `credentials.present`,
-`project`, `usageLine` and `nextSteps`.
+`project`, `configFile`, `home`, `searched` (every config.json path looked at), `usageLine` and `nextSteps`.
 
 ## Usage tracking
 
 `dockeriser usage` adds up this month's builds from the Cloud Build API (start to finish, per second,
-default machine only) and saves the result to `%USERPROFILE%\.dockeriser\usage-cache.json`. Every
+default machine only) and saves the result to `~\.dockeriser\usage-cache.json`. Every
 `build` adds its own minutes to that cache, so the line printed after each build stays current without an
 API call. Numbers are estimates for one project and region; the free minutes are shared by your whole
 billing account. The real bill: https://console.cloud.google.com/billing. Prices live in `src/pricing.js`.

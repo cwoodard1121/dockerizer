@@ -138,6 +138,25 @@ target was built.
   `https://<region>-docker.pkg.dev/v2/...`; dockeriser also handles the standard 401 challenge by
   exchanging it with basic auth `oauth2accesstoken:<token>`, the way `docker login` does.
 
+## 6. Parallel builds and image cleanup (checked 2026-10-16)
+
+- **Steps in one build share one worker.** `waitFor: ['-']` starts a step "immediately", so steps can
+  run concurrently, but they run on the build's single worker VM (e2-standard-2 by default, 2 vCPUs).
+  Source: https://docs.cloud.google.com/build/docs/configuring-builds/configure-build-step-order
+  So independent images go to **separate builds** (one machine each), sharing one uploaded source.
+- **Concurrent builds:** the default pool allows "10 - 30" concurrent builds per project (global, not
+  per region), and the quota cannot be raised. Source: https://docs.cloud.google.com/build/quotas
+  dockeriser starts one build per group of dependent images, a handful at most.
+- **Minutes:** builds are billed per second each, so N parallel builds cost about the same minutes as
+  one sequential run plus each build's start-up and cache pull.
+- **`gcloud artifacts repositories set-cleanup-policies`** "sets or updates" policies: a rule with a
+  name the file doesn't mention stays. `dockeriser cleanup` therefore removes an older
+  `keep-N-most-recent` rule with `delete-cleanup-policies --policynames=…` (gcloud 589.0.0). Two
+  Keep rules would be harmless anyway (a version kept by any Keep rule is kept), only confusing.
+- **Versions** come from `gcloud artifacts docker images list <repo> --include-tags --format=json`:
+  `package`, `version` (the digest), `tags` (a list), `createTime`, `metadata.imageSizeBytes`.
+  Image sizes overlap (shared layers), so "bytes freed" is an upper bound.
+
 ## Deviations from the original design (and why)
 
 1. **Logs bucket gets `roles/storage.admin`, not `storage.objectAdmin`.** The logs page names Storage
